@@ -354,7 +354,8 @@ void Tensor<T>::Transform(const std::function<T(T)>& filter) {
 template <typename T>
 const std::vector<uint32_t>& Tensor<T>::raw_shapes() const {
   CHECK(!this->raw_shapes_.empty());
-  CHECK_LE(this->raw_shapes_.size(), 3);
+  // [MODIFIED] 2026-王思博: 移除维度检查以支持高维 Tensor (如 5D)
+  // CHECK_LE(this->raw_shapes_.size(), 3);
   CHECK_GE(this->raw_shapes_.size(), 1);
   return this->raw_shapes_;
 }
@@ -366,7 +367,10 @@ void Tensor<T>::Reshape(const std::vector<uint32_t>& shapes, bool row_major) {
   const size_t origin_size = this->size();
   const size_t current_size =
       std::accumulate(shapes.begin(), shapes.end(), size_t(1), std::multiplies<size_t>());
-  CHECK(shapes.size() <= 3);
+  
+  // [MODIFIED] 2026-王思博: 允许任意维度的 Reshape
+  // CHECK(shapes.size() <= 3);
+  
   CHECK(current_size == origin_size);
   if (!row_major) {
     if (shapes.size() == 3) {
@@ -375,20 +379,31 @@ void Tensor<T>::Reshape(const std::vector<uint32_t>& shapes, bool row_major) {
     } else if (shapes.size() == 2) {
       this->data_.reshape(shapes.at(0), shapes.at(1), 1);
       this->raw_shapes_ = {shapes.at(0), shapes.at(1)};
-    } else {
+    } else if (shapes.size() == 1) {
       this->data_.reshape(1, shapes.at(0), 1);
       this->raw_shapes_ = {shapes.at(0)};
+    } else {
+      // [ADDED] 2026-王思博: 处理 > 3 维的情况
+      // 物理上：扁平化为 (Total, 1, 1) 的列向量
+      this->data_.reshape(static_cast<uint32_t>(current_size), 1, 1);
+      this->raw_shapes_ = shapes;
     }
   } else {
+    // Row Major 分支
     if (shapes.size() == 3) {
       this->Review({shapes.at(0), shapes.at(1), shapes.at(2)});
       this->raw_shapes_ = {shapes.at(0), shapes.at(1), shapes.at(2)};
     } else if (shapes.size() == 2) {
       this->Review({1, shapes.at(0), shapes.at(1)});
       this->raw_shapes_ = {shapes.at(0), shapes.at(1)};
-    } else {
+    } else if (shapes.size() == 1) {
       this->Review({1, 1, shapes.at(0)});
       this->raw_shapes_ = {shapes.at(0)};
+    } else {
+      // [ADDED] 2026-王思博: 处理 > 3 维的情况
+      // 使用 static_cast 消除 narrowing warning
+      this->Review({1, static_cast<uint32_t>(current_size), 1});
+      this->raw_shapes_ = shapes;
     }
   }
 }

@@ -1,0 +1,194 @@
+7767517
+192 215
+pnnx.Input               pnnx_input_0             0 1 0 #0=(1,3,224,224)f32
+pnnx.Attribute           pos_embed                0 1 1 @data=(1,197,192)f32 #1=(1,197,192)f32
+nn.Conv2d                patch_embed.proj         1 1 0 2 bias=True dilation=(1,1) groups=1 in_channels=3 kernel_size=(16,16) out_channels=192 padding=(0,0) padding_mode=zeros stride=(16,16) @bias=(192)f32 @weight=(192,3,16,16)f32 #0=(1,3,224,224)f32 #2=(1,192,14,14)f32
+torch.flatten            torch.flatten_63         1 1 2 3 end_dim=-1 start_dim=2 $input=2 #2=(1,192,14,14)f32 #3=(1,192,196)f32
+torch.transpose          torch.transpose_64       1 1 3 4 dim0=1 dim1=2 $input=3 #3=(1,192,196)f32 #4=(1,196,192)f32
+pnnx.Attribute           pnnx_fold_38             0 1 5 @data=(1,1,192)f32 #5=(1,1,192)f32
+torch.cat                torch.cat_62             2 1 5 4 6 dim=1 #5=(1,1,192)f32 #4=(1,196,192)f32 #6=(1,197,192)f32
+pnnx.Expression          pnnx_expr_234            2 1 6 1 7 expr=add(@0,@1) #6=(1,197,192)f32 #1=(1,197,192)f32 #7=(1,197,192)f32
+nn.LayerNorm             ln_0                     1 1 7 8 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=7 #7=(1,197,192)f32 #8=(1,197,192)f32
+nn.Linear                blocks.0.attn.qkv        1 1 8 9 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #8=(1,197,192)f32 #9=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_38        1 1 9 10 shape=(1,197,3,3,64) $input=9 #9=(1,197,576)f32 #10=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_26        1 1 10 11 dims=(2,0,3,1,4) $input=10 #10=(1,197,3,3,64)f32 #11=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_77          1 3 11 12 13 14 dim=0 $input=11 #11=(3,1,3,197,64)f32 #12=(1,3,197,64)f32 #13=(1,3,197,64)f32 #14=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_116 3 1 12 13 14 15 attn_mask=None dropout_p=0.0 is_causal=False $query=12 $key=13 $value=14 #12=(1,3,197,64)f32 #13=(1,3,197,64)f32 #14=(1,3,197,64)f32 #15=(1,3,197,64)f32
+torch.transpose          torch.transpose_65       1 1 15 16 dim0=1 dim1=2 $input=15 #15=(1,3,197,64)f32 #16=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_39        1 1 16 17 shape=(1,197,192) $input=16 #16=(1,197,3,64)f32 #17=(1,197,192)f32
+nn.Linear                blocks.0.attn.proj       1 1 17 18 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #17=(1,197,192)f32 #18=(1,197,192)f32
+pnnx.Expression          pnnx_expr_218            2 1 7 18 19 expr=add(@0,@1) #7=(1,197,192)f32 #18=(1,197,192)f32 #19=(1,197,192)f32
+nn.LayerNorm             ln_1                     1 1 19 20 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=19 #19=(1,197,192)f32 #20=(1,197,192)f32
+nn.Linear                blocks.0.mlp.fc1         1 1 20 21 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #20=(1,197,192)f32 #21=(1,197,768)f32
+nn.GELU                  blocks.0.mlp.act         1 1 21 22 #21=(1,197,768)f32 #22=(1,197,768)f32
+nn.Linear                blocks.0.mlp.fc2         1 1 22 23 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #22=(1,197,768)f32 #23=(1,197,192)f32
+pnnx.Expression          pnnx_expr_215            2 1 19 23 24 expr=add(@0,@1) #19=(1,197,192)f32 #23=(1,197,192)f32 #24=(1,197,192)f32
+nn.LayerNorm             ln_2                     1 1 24 25 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=24 #24=(1,197,192)f32 #25=(1,197,192)f32
+nn.Linear                blocks.1.attn.qkv        1 1 25 26 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #25=(1,197,192)f32 #26=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_40        1 1 26 27 shape=(1,197,3,3,64) $input=26 #26=(1,197,576)f32 #27=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_27        1 1 27 28 dims=(2,0,3,1,4) $input=27 #27=(1,197,3,3,64)f32 #28=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_78          1 3 28 29 30 31 dim=0 $input=28 #28=(3,1,3,197,64)f32 #29=(1,3,197,64)f32 #30=(1,3,197,64)f32 #31=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_117 3 1 29 30 31 32 attn_mask=None dropout_p=0.0 is_causal=False $query=29 $key=30 $value=31 #29=(1,3,197,64)f32 #30=(1,3,197,64)f32 #31=(1,3,197,64)f32 #32=(1,3,197,64)f32
+torch.transpose          torch.transpose_66       1 1 32 33 dim0=1 dim1=2 $input=32 #32=(1,3,197,64)f32 #33=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_41        1 1 33 34 shape=(1,197,192) $input=33 #33=(1,197,3,64)f32 #34=(1,197,192)f32
+nn.Linear                blocks.1.attn.proj       1 1 34 35 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #34=(1,197,192)f32 #35=(1,197,192)f32
+pnnx.Expression          pnnx_expr_199            2 1 24 35 36 expr=add(@0,@1) #24=(1,197,192)f32 #35=(1,197,192)f32 #36=(1,197,192)f32
+nn.LayerNorm             ln_3                     1 1 36 37 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=36 #36=(1,197,192)f32 #37=(1,197,192)f32
+nn.Linear                blocks.1.mlp.fc1         1 1 37 38 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #37=(1,197,192)f32 #38=(1,197,768)f32
+nn.GELU                  blocks.1.mlp.act         1 1 38 39 #38=(1,197,768)f32 #39=(1,197,768)f32
+nn.Linear                blocks.1.mlp.fc2         1 1 39 40 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #39=(1,197,768)f32 #40=(1,197,192)f32
+pnnx.Expression          pnnx_expr_196            2 1 36 40 41 expr=add(@0,@1) #36=(1,197,192)f32 #40=(1,197,192)f32 #41=(1,197,192)f32
+nn.LayerNorm             ln_4                     1 1 41 42 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=41 #41=(1,197,192)f32 #42=(1,197,192)f32
+nn.Linear                blocks.2.attn.qkv        1 1 42 43 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #42=(1,197,192)f32 #43=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_42        1 1 43 44 shape=(1,197,3,3,64) $input=43 #43=(1,197,576)f32 #44=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_28        1 1 44 45 dims=(2,0,3,1,4) $input=44 #44=(1,197,3,3,64)f32 #45=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_79          1 3 45 46 47 48 dim=0 $input=45 #45=(3,1,3,197,64)f32 #46=(1,3,197,64)f32 #47=(1,3,197,64)f32 #48=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_118 3 1 46 47 48 49 attn_mask=None dropout_p=0.0 is_causal=False $query=46 $key=47 $value=48 #46=(1,3,197,64)f32 #47=(1,3,197,64)f32 #48=(1,3,197,64)f32 #49=(1,3,197,64)f32
+torch.transpose          torch.transpose_67       1 1 49 50 dim0=1 dim1=2 $input=49 #49=(1,3,197,64)f32 #50=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_43        1 1 50 51 shape=(1,197,192) $input=50 #50=(1,197,3,64)f32 #51=(1,197,192)f32
+nn.Linear                blocks.2.attn.proj       1 1 51 52 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #51=(1,197,192)f32 #52=(1,197,192)f32
+pnnx.Expression          pnnx_expr_180            2 1 41 52 53 expr=add(@0,@1) #41=(1,197,192)f32 #52=(1,197,192)f32 #53=(1,197,192)f32
+nn.LayerNorm             ln_5                     1 1 53 54 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=53 #53=(1,197,192)f32 #54=(1,197,192)f32
+nn.Linear                blocks.2.mlp.fc1         1 1 54 55 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #54=(1,197,192)f32 #55=(1,197,768)f32
+nn.GELU                  blocks.2.mlp.act         1 1 55 56 #55=(1,197,768)f32 #56=(1,197,768)f32
+nn.Linear                blocks.2.mlp.fc2         1 1 56 57 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #56=(1,197,768)f32 #57=(1,197,192)f32
+pnnx.Expression          pnnx_expr_177            2 1 53 57 58 expr=add(@0,@1) #53=(1,197,192)f32 #57=(1,197,192)f32 #58=(1,197,192)f32
+nn.LayerNorm             ln_6                     1 1 58 59 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=58 #58=(1,197,192)f32 #59=(1,197,192)f32
+nn.Linear                blocks.3.attn.qkv        1 1 59 60 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #59=(1,197,192)f32 #60=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_44        1 1 60 61 shape=(1,197,3,3,64) $input=60 #60=(1,197,576)f32 #61=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_29        1 1 61 62 dims=(2,0,3,1,4) $input=61 #61=(1,197,3,3,64)f32 #62=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_80          1 3 62 63 64 65 dim=0 $input=62 #62=(3,1,3,197,64)f32 #63=(1,3,197,64)f32 #64=(1,3,197,64)f32 #65=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_119 3 1 63 64 65 66 attn_mask=None dropout_p=0.0 is_causal=False $query=63 $key=64 $value=65 #63=(1,3,197,64)f32 #64=(1,3,197,64)f32 #65=(1,3,197,64)f32 #66=(1,3,197,64)f32
+torch.transpose          torch.transpose_68       1 1 66 67 dim0=1 dim1=2 $input=66 #66=(1,3,197,64)f32 #67=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_45        1 1 67 68 shape=(1,197,192) $input=67 #67=(1,197,3,64)f32 #68=(1,197,192)f32
+nn.Linear                blocks.3.attn.proj       1 1 68 69 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #68=(1,197,192)f32 #69=(1,197,192)f32
+pnnx.Expression          pnnx_expr_161            2 1 58 69 70 expr=add(@0,@1) #58=(1,197,192)f32 #69=(1,197,192)f32 #70=(1,197,192)f32
+nn.LayerNorm             ln_7                     1 1 70 71 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=70 #70=(1,197,192)f32 #71=(1,197,192)f32
+nn.Linear                blocks.3.mlp.fc1         1 1 71 72 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #71=(1,197,192)f32 #72=(1,197,768)f32
+nn.GELU                  blocks.3.mlp.act         1 1 72 73 #72=(1,197,768)f32 #73=(1,197,768)f32
+nn.Linear                blocks.3.mlp.fc2         1 1 73 74 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #73=(1,197,768)f32 #74=(1,197,192)f32
+pnnx.Expression          pnnx_expr_158            2 1 70 74 75 expr=add(@0,@1) #70=(1,197,192)f32 #74=(1,197,192)f32 #75=(1,197,192)f32
+nn.LayerNorm             ln_8                     1 1 75 76 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=75 #75=(1,197,192)f32 #76=(1,197,192)f32
+nn.Linear                blocks.4.attn.qkv        1 1 76 77 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #76=(1,197,192)f32 #77=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_46        1 1 77 78 shape=(1,197,3,3,64) $input=77 #77=(1,197,576)f32 #78=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_30        1 1 78 79 dims=(2,0,3,1,4) $input=78 #78=(1,197,3,3,64)f32 #79=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_81          1 3 79 80 81 82 dim=0 $input=79 #79=(3,1,3,197,64)f32 #80=(1,3,197,64)f32 #81=(1,3,197,64)f32 #82=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_120 3 1 80 81 82 83 attn_mask=None dropout_p=0.0 is_causal=False $query=80 $key=81 $value=82 #80=(1,3,197,64)f32 #81=(1,3,197,64)f32 #82=(1,3,197,64)f32 #83=(1,3,197,64)f32
+torch.transpose          torch.transpose_69       1 1 83 84 dim0=1 dim1=2 $input=83 #83=(1,3,197,64)f32 #84=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_47        1 1 84 85 shape=(1,197,192) $input=84 #84=(1,197,3,64)f32 #85=(1,197,192)f32
+nn.Linear                blocks.4.attn.proj       1 1 85 86 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #85=(1,197,192)f32 #86=(1,197,192)f32
+pnnx.Expression          pnnx_expr_142            2 1 75 86 87 expr=add(@0,@1) #75=(1,197,192)f32 #86=(1,197,192)f32 #87=(1,197,192)f32
+nn.LayerNorm             ln_9                     1 1 87 88 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=87 #87=(1,197,192)f32 #88=(1,197,192)f32
+nn.Linear                blocks.4.mlp.fc1         1 1 88 89 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #88=(1,197,192)f32 #89=(1,197,768)f32
+nn.GELU                  blocks.4.mlp.act         1 1 89 90 #89=(1,197,768)f32 #90=(1,197,768)f32
+nn.Linear                blocks.4.mlp.fc2         1 1 90 91 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #90=(1,197,768)f32 #91=(1,197,192)f32
+pnnx.Expression          pnnx_expr_139            2 1 87 91 92 expr=add(@0,@1) #87=(1,197,192)f32 #91=(1,197,192)f32 #92=(1,197,192)f32
+nn.LayerNorm             ln_10                    1 1 92 93 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=92 #92=(1,197,192)f32 #93=(1,197,192)f32
+nn.Linear                blocks.5.attn.qkv        1 1 93 94 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #93=(1,197,192)f32 #94=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_48        1 1 94 95 shape=(1,197,3,3,64) $input=94 #94=(1,197,576)f32 #95=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_31        1 1 95 96 dims=(2,0,3,1,4) $input=95 #95=(1,197,3,3,64)f32 #96=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_82          1 3 96 97 98 99 dim=0 $input=96 #96=(3,1,3,197,64)f32 #97=(1,3,197,64)f32 #98=(1,3,197,64)f32 #99=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_121 3 1 97 98 99 100 attn_mask=None dropout_p=0.0 is_causal=False $query=97 $key=98 $value=99 #97=(1,3,197,64)f32 #98=(1,3,197,64)f32 #99=(1,3,197,64)f32 #100=(1,3,197,64)f32
+torch.transpose          torch.transpose_70       1 1 100 101 dim0=1 dim1=2 $input=100 #100=(1,3,197,64)f32 #101=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_49        1 1 101 102 shape=(1,197,192) $input=101 #101=(1,197,3,64)f32 #102=(1,197,192)f32
+nn.Linear                blocks.5.attn.proj       1 1 102 103 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #102=(1,197,192)f32 #103=(1,197,192)f32
+pnnx.Expression          pnnx_expr_123            2 1 92 103 104 expr=add(@0,@1) #92=(1,197,192)f32 #103=(1,197,192)f32 #104=(1,197,192)f32
+nn.LayerNorm             ln_11                    1 1 104 105 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=104 #104=(1,197,192)f32 #105=(1,197,192)f32
+nn.Linear                blocks.5.mlp.fc1         1 1 105 106 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #105=(1,197,192)f32 #106=(1,197,768)f32
+nn.GELU                  blocks.5.mlp.act         1 1 106 107 #106=(1,197,768)f32 #107=(1,197,768)f32
+nn.Linear                blocks.5.mlp.fc2         1 1 107 108 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #107=(1,197,768)f32 #108=(1,197,192)f32
+pnnx.Expression          pnnx_expr_120            2 1 104 108 109 expr=add(@0,@1) #104=(1,197,192)f32 #108=(1,197,192)f32 #109=(1,197,192)f32
+nn.LayerNorm             ln_12                    1 1 109 110 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=109 #109=(1,197,192)f32 #110=(1,197,192)f32
+nn.Linear                blocks.6.attn.qkv        1 1 110 111 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #110=(1,197,192)f32 #111=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_50        1 1 111 112 shape=(1,197,3,3,64) $input=111 #111=(1,197,576)f32 #112=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_32        1 1 112 113 dims=(2,0,3,1,4) $input=112 #112=(1,197,3,3,64)f32 #113=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_83          1 3 113 114 115 116 dim=0 $input=113 #113=(3,1,3,197,64)f32 #114=(1,3,197,64)f32 #115=(1,3,197,64)f32 #116=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_122 3 1 114 115 116 117 attn_mask=None dropout_p=0.0 is_causal=False $query=114 $key=115 $value=116 #114=(1,3,197,64)f32 #115=(1,3,197,64)f32 #116=(1,3,197,64)f32 #117=(1,3,197,64)f32
+torch.transpose          torch.transpose_71       1 1 117 118 dim0=1 dim1=2 $input=117 #117=(1,3,197,64)f32 #118=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_51        1 1 118 119 shape=(1,197,192) $input=118 #118=(1,197,3,64)f32 #119=(1,197,192)f32
+nn.Linear                blocks.6.attn.proj       1 1 119 120 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #119=(1,197,192)f32 #120=(1,197,192)f32
+pnnx.Expression          pnnx_expr_104            2 1 109 120 121 expr=add(@0,@1) #109=(1,197,192)f32 #120=(1,197,192)f32 #121=(1,197,192)f32
+nn.LayerNorm             ln_13                    1 1 121 122 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=121 #121=(1,197,192)f32 #122=(1,197,192)f32
+nn.Linear                blocks.6.mlp.fc1         1 1 122 123 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #122=(1,197,192)f32 #123=(1,197,768)f32
+nn.GELU                  blocks.6.mlp.act         1 1 123 124 #123=(1,197,768)f32 #124=(1,197,768)f32
+nn.Linear                blocks.6.mlp.fc2         1 1 124 125 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #124=(1,197,768)f32 #125=(1,197,192)f32
+pnnx.Expression          pnnx_expr_101            2 1 121 125 126 expr=add(@0,@1) #121=(1,197,192)f32 #125=(1,197,192)f32 #126=(1,197,192)f32
+nn.LayerNorm             ln_14                    1 1 126 127 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=126 #126=(1,197,192)f32 #127=(1,197,192)f32
+nn.Linear                blocks.7.attn.qkv        1 1 127 128 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #127=(1,197,192)f32 #128=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_52        1 1 128 129 shape=(1,197,3,3,64) $input=128 #128=(1,197,576)f32 #129=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_33        1 1 129 130 dims=(2,0,3,1,4) $input=129 #129=(1,197,3,3,64)f32 #130=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_84          1 3 130 131 132 133 dim=0 $input=130 #130=(3,1,3,197,64)f32 #131=(1,3,197,64)f32 #132=(1,3,197,64)f32 #133=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_123 3 1 131 132 133 134 attn_mask=None dropout_p=0.0 is_causal=False $query=131 $key=132 $value=133 #131=(1,3,197,64)f32 #132=(1,3,197,64)f32 #133=(1,3,197,64)f32 #134=(1,3,197,64)f32
+torch.transpose          torch.transpose_72       1 1 134 135 dim0=1 dim1=2 $input=134 #134=(1,3,197,64)f32 #135=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_53        1 1 135 136 shape=(1,197,192) $input=135 #135=(1,197,3,64)f32 #136=(1,197,192)f32
+nn.Linear                blocks.7.attn.proj       1 1 136 137 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #136=(1,197,192)f32 #137=(1,197,192)f32
+pnnx.Expression          pnnx_expr_85             2 1 126 137 138 expr=add(@0,@1) #126=(1,197,192)f32 #137=(1,197,192)f32 #138=(1,197,192)f32
+nn.LayerNorm             ln_15                    1 1 138 139 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=138 #138=(1,197,192)f32 #139=(1,197,192)f32
+nn.Linear                blocks.7.mlp.fc1         1 1 139 140 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #139=(1,197,192)f32 #140=(1,197,768)f32
+nn.GELU                  blocks.7.mlp.act         1 1 140 141 #140=(1,197,768)f32 #141=(1,197,768)f32
+nn.Linear                blocks.7.mlp.fc2         1 1 141 142 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #141=(1,197,768)f32 #142=(1,197,192)f32
+pnnx.Expression          pnnx_expr_82             2 1 138 142 143 expr=add(@0,@1) #138=(1,197,192)f32 #142=(1,197,192)f32 #143=(1,197,192)f32
+nn.LayerNorm             ln_16                    1 1 143 144 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=143 #143=(1,197,192)f32 #144=(1,197,192)f32
+nn.Linear                blocks.8.attn.qkv        1 1 144 145 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #144=(1,197,192)f32 #145=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_54        1 1 145 146 shape=(1,197,3,3,64) $input=145 #145=(1,197,576)f32 #146=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_34        1 1 146 147 dims=(2,0,3,1,4) $input=146 #146=(1,197,3,3,64)f32 #147=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_85          1 3 147 148 149 150 dim=0 $input=147 #147=(3,1,3,197,64)f32 #148=(1,3,197,64)f32 #149=(1,3,197,64)f32 #150=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_124 3 1 148 149 150 151 attn_mask=None dropout_p=0.0 is_causal=False $query=148 $key=149 $value=150 #148=(1,3,197,64)f32 #149=(1,3,197,64)f32 #150=(1,3,197,64)f32 #151=(1,3,197,64)f32
+torch.transpose          torch.transpose_73       1 1 151 152 dim0=1 dim1=2 $input=151 #151=(1,3,197,64)f32 #152=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_55        1 1 152 153 shape=(1,197,192) $input=152 #152=(1,197,3,64)f32 #153=(1,197,192)f32
+nn.Linear                blocks.8.attn.proj       1 1 153 154 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #153=(1,197,192)f32 #154=(1,197,192)f32
+pnnx.Expression          pnnx_expr_66             2 1 143 154 155 expr=add(@0,@1) #143=(1,197,192)f32 #154=(1,197,192)f32 #155=(1,197,192)f32
+nn.LayerNorm             ln_17                    1 1 155 156 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=155 #155=(1,197,192)f32 #156=(1,197,192)f32
+nn.Linear                blocks.8.mlp.fc1         1 1 156 157 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #156=(1,197,192)f32 #157=(1,197,768)f32
+nn.GELU                  blocks.8.mlp.act         1 1 157 158 #157=(1,197,768)f32 #158=(1,197,768)f32
+nn.Linear                blocks.8.mlp.fc2         1 1 158 159 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #158=(1,197,768)f32 #159=(1,197,192)f32
+pnnx.Expression          pnnx_expr_63             2 1 155 159 160 expr=add(@0,@1) #155=(1,197,192)f32 #159=(1,197,192)f32 #160=(1,197,192)f32
+nn.LayerNorm             ln_18                    1 1 160 161 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=160 #160=(1,197,192)f32 #161=(1,197,192)f32
+nn.Linear                blocks.9.attn.qkv        1 1 161 162 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #161=(1,197,192)f32 #162=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_56        1 1 162 163 shape=(1,197,3,3,64) $input=162 #162=(1,197,576)f32 #163=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_35        1 1 163 164 dims=(2,0,3,1,4) $input=163 #163=(1,197,3,3,64)f32 #164=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_86          1 3 164 165 166 167 dim=0 $input=164 #164=(3,1,3,197,64)f32 #165=(1,3,197,64)f32 #166=(1,3,197,64)f32 #167=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_125 3 1 165 166 167 168 attn_mask=None dropout_p=0.0 is_causal=False $query=165 $key=166 $value=167 #165=(1,3,197,64)f32 #166=(1,3,197,64)f32 #167=(1,3,197,64)f32 #168=(1,3,197,64)f32
+torch.transpose          torch.transpose_74       1 1 168 169 dim0=1 dim1=2 $input=168 #168=(1,3,197,64)f32 #169=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_57        1 1 169 170 shape=(1,197,192) $input=169 #169=(1,197,3,64)f32 #170=(1,197,192)f32
+nn.Linear                blocks.9.attn.proj       1 1 170 171 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #170=(1,197,192)f32 #171=(1,197,192)f32
+pnnx.Expression          pnnx_expr_47             2 1 160 171 172 expr=add(@0,@1) #160=(1,197,192)f32 #171=(1,197,192)f32 #172=(1,197,192)f32
+nn.LayerNorm             ln_19                    1 1 172 173 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=172 #172=(1,197,192)f32 #173=(1,197,192)f32
+nn.Linear                blocks.9.mlp.fc1         1 1 173 174 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #173=(1,197,192)f32 #174=(1,197,768)f32
+nn.GELU                  blocks.9.mlp.act         1 1 174 175 #174=(1,197,768)f32 #175=(1,197,768)f32
+nn.Linear                blocks.9.mlp.fc2         1 1 175 176 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #175=(1,197,768)f32 #176=(1,197,192)f32
+pnnx.Expression          pnnx_expr_44             2 1 172 176 177 expr=add(@0,@1) #172=(1,197,192)f32 #176=(1,197,192)f32 #177=(1,197,192)f32
+nn.LayerNorm             ln_20                    1 1 177 178 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=177 #177=(1,197,192)f32 #178=(1,197,192)f32
+nn.Linear                blocks.10.attn.qkv       1 1 178 179 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #178=(1,197,192)f32 #179=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_58        1 1 179 180 shape=(1,197,3,3,64) $input=179 #179=(1,197,576)f32 #180=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_36        1 1 180 181 dims=(2,0,3,1,4) $input=180 #180=(1,197,3,3,64)f32 #181=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_87          1 3 181 182 183 184 dim=0 $input=181 #181=(3,1,3,197,64)f32 #182=(1,3,197,64)f32 #183=(1,3,197,64)f32 #184=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_126 3 1 182 183 184 185 attn_mask=None dropout_p=0.0 is_causal=False $query=182 $key=183 $value=184 #182=(1,3,197,64)f32 #183=(1,3,197,64)f32 #184=(1,3,197,64)f32 #185=(1,3,197,64)f32
+torch.transpose          torch.transpose_75       1 1 185 186 dim0=1 dim1=2 $input=185 #185=(1,3,197,64)f32 #186=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_59        1 1 186 187 shape=(1,197,192) $input=186 #186=(1,197,3,64)f32 #187=(1,197,192)f32
+nn.Linear                blocks.10.attn.proj      1 1 187 188 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #187=(1,197,192)f32 #188=(1,197,192)f32
+pnnx.Expression          pnnx_expr_28             2 1 177 188 189 expr=add(@0,@1) #177=(1,197,192)f32 #188=(1,197,192)f32 #189=(1,197,192)f32
+nn.LayerNorm             ln_21                    1 1 189 190 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=189 #189=(1,197,192)f32 #190=(1,197,192)f32
+nn.Linear                blocks.10.mlp.fc1        1 1 190 191 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #190=(1,197,192)f32 #191=(1,197,768)f32
+nn.GELU                  blocks.10.mlp.act        1 1 191 192 #191=(1,197,768)f32 #192=(1,197,768)f32
+nn.Linear                blocks.10.mlp.fc2        1 1 192 193 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #192=(1,197,768)f32 #193=(1,197,192)f32
+pnnx.Expression          pnnx_expr_25             2 1 189 193 194 expr=add(@0,@1) #189=(1,197,192)f32 #193=(1,197,192)f32 #194=(1,197,192)f32
+nn.LayerNorm             ln_22                    1 1 194 195 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=194 #194=(1,197,192)f32 #195=(1,197,192)f32
+nn.Linear                blocks.11.attn.qkv       1 1 195 196 bias=True in_features=192 out_features=576 @bias=(576)f32 @weight=(576,192)f32 #195=(1,197,192)f32 #196=(1,197,576)f32
+Tensor.reshape           Tensor.reshape_60        1 1 196 197 shape=(1,197,3,3,64) $input=196 #196=(1,197,576)f32 #197=(1,197,3,3,64)f32
+Tensor.permute           Tensor.permute_37        1 1 197 198 dims=(2,0,3,1,4) $input=197 #197=(1,197,3,3,64)f32 #198=(3,1,3,197,64)f32
+torch.unbind             torch.unbind_88          1 3 198 199 200 201 dim=0 $input=198 #198=(3,1,3,197,64)f32 #199=(1,3,197,64)f32 #200=(1,3,197,64)f32 #201=(1,3,197,64)f32
+F.scaled_dot_product_attention F.scaled_dot_product_attention_127 3 1 199 200 201 202 attn_mask=None dropout_p=0.0 is_causal=False $query=199 $key=200 $value=201 #199=(1,3,197,64)f32 #200=(1,3,197,64)f32 #201=(1,3,197,64)f32 #202=(1,3,197,64)f32
+torch.transpose          torch.transpose_76       1 1 202 203 dim0=1 dim1=2 $input=202 #202=(1,3,197,64)f32 #203=(1,197,3,64)f32
+Tensor.reshape           Tensor.reshape_61        1 1 203 204 shape=(1,197,192) $input=203 #203=(1,197,3,64)f32 #204=(1,197,192)f32
+nn.Linear                blocks.11.attn.proj      1 1 204 205 bias=True in_features=192 out_features=192 @bias=(192)f32 @weight=(192,192)f32 #204=(1,197,192)f32 #205=(1,197,192)f32
+pnnx.Expression          pnnx_expr_9              2 1 194 205 206 expr=add(@0,@1) #194=(1,197,192)f32 #205=(1,197,192)f32 #206=(1,197,192)f32
+nn.LayerNorm             ln_23                    1 1 206 207 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=206 #206=(1,197,192)f32 #207=(1,197,192)f32
+nn.Linear                blocks.11.mlp.fc1        1 1 207 208 bias=True in_features=192 out_features=768 @bias=(768)f32 @weight=(768,192)f32 #207=(1,197,192)f32 #208=(1,197,768)f32
+nn.GELU                  blocks.11.mlp.act        1 1 208 209 #208=(1,197,768)f32 #209=(1,197,768)f32
+nn.Linear                blocks.11.mlp.fc2        1 1 209 210 bias=True in_features=768 out_features=192 @bias=(192)f32 @weight=(192,768)f32 #209=(1,197,768)f32 #210=(1,197,192)f32
+pnnx.Expression          pnnx_expr_6              2 1 206 210 211 expr=add(@0,@1) #206=(1,197,192)f32 #210=(1,197,192)f32 #211=(1,197,192)f32
+nn.LayerNorm             ln_24                    1 1 211 212 elementwise_affine=True eps=1.000000e-06 normalized_shape=(192) @bias=(192)f32 @weight=(192)f32 $input=211 #211=(1,197,192)f32 #212=(1,197,192)f32
+Tensor.select            Tensor.select_89         1 1 212 213 dim=1 index=0 $input=212 #212=(1,197,192)f32 #213=(1,192)f32
+nn.Linear                head                     1 1 213 214 bias=True in_features=192 out_features=1000 @bias=(1000)f32 @weight=(1000,192)f32 #213=(1,192)f32 #214=(1,1000)f32
+pnnx.Output              pnnx_output_0            1 0 214 #214=(1,1000)f32

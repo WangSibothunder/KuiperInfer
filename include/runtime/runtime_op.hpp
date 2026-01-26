@@ -156,5 +156,7 @@ class RuntimeOperatorUtils<float> {
                                  const std::vector<std::shared_ptr<RuntimeOperator>>& operators);
 };
 
+
+
 }  // namespace kuiper_infer
 #endif  // KUIPER_INFER_INCLUDE_PARSER_RUNTIME_OPERATOR_HPP_

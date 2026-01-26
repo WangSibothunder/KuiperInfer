@@ -98,6 +98,7 @@ bool RuntimeGraph::Init() {
 }
 
 void RuntimeGraph::Build() {
+  LOG(INFO) << ">>> [BuildProbe] Starting Build...";
   if (graph_state_ == GraphState::Complete) {
     LOG(INFO) << "Model has been built already!";
     return;
@@ -108,25 +109,89 @@ void RuntimeGraph::Build() {
     LOG_IF(FATAL, !init_graph || graph_state_ == GraphState::NeedInit) << "Init graph failed!";
   }
 
-  CHECK(graph_state_ >= GraphState::NeedBuild)
-      << "Graph status error, current state is " << int32_t(graph_state_);
-  LOG_IF(FATAL, this->operators_.empty()) << "Graph operators is empty, may be no init";
+  CHECK(graph_state_ >= GraphState::NeedBuild);
+  LOG_IF(FATAL, this->operators_.empty()) << "Graph operators is empty";
 
   // 构建节点关系
+  LOG(INFO) << ">>> [BuildProbe] Creating Node Relations...";
   CreateNodeRelation();
 
   // 节点拓扑排序
+  LOG(INFO) << ">>> [BuildProbe] Reverse Topo Sort...";
   ReverseTopoSort();
 
-  // 初始化节点的输入和输出空间
+  // 初始化输入输出空间
+  LOG(INFO) << ">>> [BuildProbe] Init Input/Output...";
   RuntimeOperatorUtils<float>::InitOperatorInput(operators_);
   RuntimeOperatorUtils<float>::InitOperatorOutput(graph_->ops, operators_);
+
+  // [DEBUG] 初始化 Attribute 数据
+  LOG(INFO) << ">>> [BuildProbe] Filling Attribute Data...";
+  for (const auto& op : operators_) {
+    if (op->type == "pnnx.Attribute") {
+      LOG(INFO) << ">>> [BuildProbe] Processing Attribute Op: " << op->name;
+      
+      if (op->attribute.empty()) {
+          LOG(ERROR) << "Attribute node " << op->name << " has no attributes!";
+          continue;
+      }
+      
+      std::shared_ptr<RuntimeAttribute> attr_data = nullptr;
+      if (op->attribute.find("data") != op->attribute.end()) {
+          attr_data = op->attribute.at("data");
+      } else if (op->attribute.find("weight") != op->attribute.end()) {
+          attr_data = op->attribute.at("weight");
+      } else {
+           // 打印所有 attribute 名字以供调试
+           for(const auto& pair : op->attribute) {
+               LOG(INFO) << "  Has attr: " << pair.first;
+           }
+           attr_data = op->attribute.begin()->second;
+      }
+
+      if (!attr_data) {
+          LOG(ERROR) << "Failed to find data for attribute node " << op->name;
+          continue;
+      }
+      LOG(INFO) << ">>> [BuildProbe] Found attribute data.";
+
+      if (op->output_operands == nullptr) {
+          LOG(FATAL) << "Attribute node " << op->name << " output_operands is nullptr!";
+      }
+      if (op->output_operands->datas.empty()) {
+          LOG(FATAL) << "Attribute node " << op->name << " output_operands->datas is empty!";
+      }
+      
+      std::shared_ptr<Tensor<float>> output_tensor = op->output_operands->datas.at(0);
+      if (output_tensor == nullptr) {
+          LOG(FATAL) << "Attribute node " << op->name << " output tensor[0] is nullptr!";
+      }
+      LOG(INFO) << ">>> [BuildProbe] Got output tensor.";
+      
+      // 设置形状
+      std::vector<uint32_t> shapes;
+      for(int i : attr_data->shape) shapes.push_back(i);
+      LOG(INFO) << ">>> [BuildProbe] Reshaping to rank: " << shapes.size();
+      output_tensor->Reshape(shapes);
+      
+      // 填充数据
+      LOG(INFO) << ">>> [BuildProbe] Getting float data from attribute...";
+      // 这里是最可能崩的地方：数据转换
+      const std::vector<float>& float_data = attr_data->get<float>(); 
+      LOG(INFO) << ">>> [BuildProbe] Data size: " << float_data.size();
+      
+      LOG(INFO) << ">>> [BuildProbe] Filling tensor...";
+      output_tensor->Fill(float_data);
+      LOG(INFO) << ">>> [BuildProbe] Fill done.";
+    }
+  }
 
   graph_state_ = GraphState::Complete;
   if (graph_ != nullptr) {
     graph_.reset();
     graph_ = nullptr;
   }
+  LOG(INFO) << ">>> [BuildProbe] Build Finished.";
 }
 
 template <typename T>
@@ -158,11 +223,25 @@ void RuntimeGraph::Forward(bool debug) {
     current_op->has_forward = false;
     CHECK_GT(current_op->start_time, 0);
 
+    // 1. 处理 Input/Output 节点 (直接跳过)
     if (is_input_op(current_op->name) || is_output_op(current_op->name)) {
       current_op->has_forward = true;
       continue;
     }
 
+    // 2. 处理 Attribute 节点 (关键修改)
+    // 虽然不执行 Layer 计算，但必须向下游传播数据！
+    if (current_op->type == "pnnx.Attribute") {
+      current_op->has_forward = true;
+      if (current_op->output_operands != nullptr && !current_op->output_operands->datas.empty()) {
+          PropagateLayerOutputs(current_op, current_op->output_operands->datas);
+      } else {
+          LOG(ERROR) << "Attribute node " << current_op->name << " has no output datas to propagate!";
+      }
+      continue;
+    }
+
+    // 3. 处理普通计算节点
     CHECK(current_op->layer != nullptr)
         << "The layer corresponding to the op " << current_op->name
         << " is empty, indicating that it may not have been created.";
@@ -442,28 +521,60 @@ void RuntimeGraph::ReverseTopoSortInternal(const std::shared_ptr<RuntimeOperator
 }
 
 void RuntimeGraph::CreateNodeRelation() {
-  // 构建图关系
+  LOG(INFO) << ">>> [NodeRelationProbe] Start...";
+  
+  if (this->operators_.empty()) {
+      LOG(FATAL) << ">>> [NodeRelationProbe] Operators vector is empty!";
+  }
+
+  int op_index = 0;
   for (const auto& current_op : this->operators_) {
-    // 获取当前节点的所有后继节点的names，遍历根据next_op_name从operators_maps_中插入所需要的节点
+    // 1. 基础检查
+    if (current_op == nullptr) {
+        LOG(FATAL) << ">>> [NodeRelationProbe] Found nullptr operator at index " << op_index;
+    }
+    LOG(INFO) << ">>> [NodeRelationProbe] Processing Op [" << op_index << "]: " 
+              << current_op->name << " (Type: " << current_op->type << ")";
+
+    // 2. 构建输出关系 (Output Relations)
     const std::vector<std::string>& output_names = current_op->output_names;
     for (const auto& kOutputName : output_names) {
+      // 遍历寻找消费者节点
       for (const auto& output_op : this->operators_) {
         if (output_op != current_op && output_op->name == kOutputName) {
           current_op->output_operators.insert({kOutputName, output_op});
         }
       }
     }
-    // 除了输入和输出节点，都创建layer
-    if (current_op->type != "pnnx.Input" && current_op->type != "pnnx.Output") {
+
+    // 3. 创建 Layer (关键崩溃点)
+    // 检查是否在跳过列表中
+    bool should_skip = (current_op->type == "pnnx.Input" || 
+                        current_op->type == "pnnx.Output" || 
+                        current_op->type == "pnnx.Attribute");
+
+    if (!should_skip) {
+      LOG(INFO) << ">>> [NodeRelationProbe] Creating Layer for: " << current_op->name;
+      
+      // 调用工厂创建 Layer
       auto layer = RuntimeGraph::CreateLayer(current_op);
+      
       if (layer) {
+        LOG(INFO) << ">>> [NodeRelationProbe] Layer created successfully.";
         current_op->layer = layer;
         layer->set_runtime_operator(current_op);
       } else {
-        LOG(FATAL) << "Layer " << current_op->name << " create failed!";
+        // 如果工厂返回空，说明算子未注册
+        LOG(FATAL) << ">>> [NodeRelationProbe] Layer create failed! Operator type [" 
+                   << current_op->type << "] not registered?";
       }
+    } else {
+        LOG(INFO) << ">>> [NodeRelationProbe] Skipping layer creation for: " << current_op->type;
     }
+    
+    op_index++;
   }
+  LOG(INFO) << ">>> [NodeRelationProbe] Finished.";
 }
 
 RuntimeGraph::GraphState RuntimeGraph::graph_state() const { return this->graph_state_; }
