@@ -23,7 +23,20 @@ StatusCode TransposeLayer::Forward(const std::vector<std::shared_ptr<Tensor<floa
     // 交换 dim0 和 dim1
     int d0 = dim0_ < 0 ? dim0_ + rank : dim0_;
     int d1 = dim1_ < 0 ? dim1_ + rank : dim1_;
+    // [DEBUG PROBE]
+if (!(d0 >= 0 && d0 < rank && d1 >= 0 && d1 < rank)) {
+    LOG(ERROR) << ">>> Transpose Layer Crash Detected!";
+    LOG(ERROR) << "    Layer Name: " << this->layer_name(); // 如果 Layer 类有 name 成员
+    LOG(ERROR) << "    Input Rank: " << input->shapes().size();
+    LOG(ERROR) << "    Input Shapes: ";
+    for(auto s : input->shapes()) std::cerr << s << " ";
+    std::cerr << std::endl;
     
+    LOG(ERROR) << "    Attempting to transpose dimensions: " << d0 << " and " << d1;
+    
+    // 强制打印更多信息
+    LOG(FATAL) << "Terminating to prevent silent corruption.";
+}
     CHECK(d0 >= 0 && d0 < rank && d1 >= 0 && d1 < rank);
     std::swap(dims[d0], dims[d1]);
     

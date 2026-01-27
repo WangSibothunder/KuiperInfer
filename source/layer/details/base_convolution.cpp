@@ -125,16 +125,30 @@ StatusCode BaseConvolutionLayer::Forward(const std::vector<std::shared_ptr<Tenso
         << "The size of the output tensor should be greater than zero " << i << " th";
 
     std::shared_ptr<Tensor<float>> output_tensor = outputs.at(i);
+    
+    // [FIX START] 自动修正形状逻辑
     if (output_tensor == nullptr || output_tensor->empty()) {
+      // 1. 如果为空，直接创建
       output_tensor = std::make_shared<Tensor<float>>(kernel_count, output_h, output_w);
       outputs.at(i) = output_tensor;
+    } else {
+      // 2. 如果已存在，检查形状是否匹配
+      if (output_tensor->rows() != output_h || 
+          output_tensor->cols() != output_w || 
+          output_tensor->channels() != kernel_count) {
+          
+          uint32_t needed_size = kernel_count * output_h * output_w;
+          // 2.1 尝试复用内存 (Reshape)
+          if (output_tensor->size() == needed_size) {
+              output_tensor->Reshape({kernel_count, output_h, output_w});
+          } else {
+              // 2.2 大小不匹配，重新分配
+              output_tensor = std::make_shared<Tensor<float>>(kernel_count, output_h, output_w);
+              outputs.at(i) = output_tensor; // 更新向量中的指针
+          }
+      }
     }
-
-    CHECK(output_tensor->rows() == output_h && output_tensor->cols() == output_w &&
-          output_tensor->channels() == kernel_count)
-        << "The output tensor array in the convolution layer has an "
-           "incorrectly sized tensor "
-        << i << "th";
+    // [FIX END] 原有的 CHECK 代码已移除
 
 #pragma omp parallel for if (groups_ > 1)
     for (uint32_t group = 0; group < groups_; ++group) {

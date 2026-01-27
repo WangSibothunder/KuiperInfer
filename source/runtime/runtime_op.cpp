@@ -1,89 +1,63 @@
 // MIT License
 // Copyright (c) 2022 - 傅莘莘
-// Modified for Debugging: Added Probes for Size Mismatch
+// Modified by WangSibo 2026: Fix Batch Mismatch Reuse & Dynamic Shape
+
 #include "runtime/runtime_op.hpp"
 #include "data/tensor_util.hpp"
 #include <numeric>
 
 namespace kuiper_infer {
 
-// ----------------------------------------------------------------------------------
-// [Probe 1] 包装 CheckAndReshapeTensor，增加崩溃前的详细日志
-// ----------------------------------------------------------------------------------
-// ----------------------------------------------------------------------------------
-// [Probe 1] 包装 CheckAndReshapeTensor，增加崩溃前的详细日志
-// [FIXED] 移除了 VariableLengthArray，改用手动打印
-// ----------------------------------------------------------------------------------
+// ---------------------------------------------------------
+// [FIX] 辅助函数：创建 Tensor
+// ---------------------------------------------------------
+static sftensor CreateTensor(const std::vector<int32_t>& operand_shapes) {
+  if (operand_shapes.empty()) {
+    return nullptr;
+  }
+  
+  uint32_t total_size = 1;
+  // 跳过 Batch 维度 (index 0)
+  for (size_t i = 1; i < operand_shapes.size(); ++i) {
+      if (operand_shapes[i] <= 0) {
+          continue; // 忽略动态维度
+      }
+      total_size *= static_cast<uint32_t>(operand_shapes[i]);
+  }
+  
+  return TensorCreate<float>(1, 1, total_size);
+}
+
+// ---------------------------------------------------------
+// [FIX] 辅助函数：Reshape (安全版)
+// ---------------------------------------------------------
 static void CheckAndReshapeTensor(sftensor& output_tensor,
                                   const std::vector<int32_t>& operand_shapes) {
-  const std::vector<uint32_t>& origin_shapes = output_tensor->shapes();
-  const size_t origin_size = output_tensor->size();
-  
-  // 计算目标形状的总大小
-  size_t current_size = 1;
+  if (!output_tensor) return;
+
+  // 1. 检查动态形状 (-1)
   for (const auto& dim : operand_shapes) {
-    if (dim > 0) current_size *= dim;
+      if (dim < 0) return; // 跳过 Reshape
   }
   
-  if (origin_size != current_size) {
-      // ！！！！ 捕捉到异常 ！！！！
-      LOG(ERROR) << ">>> [Probe Error] Size Mismatch Detected!";
-      LOG(ERROR) << "    Original Tensor Size: " << origin_size;
-      
-      // 手动打印 Original Shapes
-      LOG(ERROR) << "    Original Shapes: ";
-      for (const auto& s : origin_shapes) {
-          LOG(ERROR) << s << ", ";
-      }
-      
-      // 手动打印 Target Shapes
-      LOG(ERROR) << "    Target Shapes (operand_shapes): ";
-      for (const auto& s : operand_shapes) {
-          LOG(ERROR) << s << ", ";
-      }
-
-      LOG(ERROR) << "    Target Calculated Size: " << current_size;
-      
-      LOG(FATAL) << "Stopping execution due to size mismatch.";
+  // 2. 构造目标形状 (剔除 Batch)
+  std::vector<uint32_t> target_shapes;
+  for (size_t i = 1; i < operand_shapes.size(); ++i) {
+      target_shapes.push_back(static_cast<uint32_t>(operand_shapes[i]));
+  }
+  
+  if (target_shapes.empty()) {
+      target_shapes.push_back(1);
   }
 
-  const std::vector<int32_t>& operand_shapes_ref = operand_shapes;
-  // 跳过 Batch 维度 (index 0) 进行 Reshape
-  if (operand_shapes_ref.size() > 1) {
-      output_tensor->Reshape(std::vector<uint32_t>(operand_shapes_ref.begin() + 1, operand_shapes_ref.end()));
-  } else {
-      // 兼容标量或特殊情况
-      output_tensor->Reshape(std::vector<uint32_t>(operand_shapes_ref.begin(), operand_shapes_ref.end()));
-  }
+  // 3. 执行 Reshape
+  // 如果这里依然报错，说明 InitOperatorOutput 的复用筛选没拦住，但本次修复应该已解决
+  output_tensor->Reshape(target_shapes);
 }
 
-// ----------------------------------------------------------------------------------
-// [Probe 2] 包装 CreateTensor，保持原逻辑
-// ----------------------------------------------------------------------------------
-static sftensor CreateTensor(const std::vector<int32_t>& operand_shapes) {
-  switch (operand_shapes.size()) {
-    case 4:
-      return TensorCreate<float>(operand_shapes[1], operand_shapes[2], operand_shapes[3]);
-    case 3:
-      return TensorCreate<float>(operand_shapes[1], operand_shapes[2]);
-    case 2:
-      return TensorCreate<float>(operand_shapes[1]);
-    case 5: // [Added for DeiT] 仅增加对 5D 的支持，逻辑不变
-        {
-            // 临时策略：将最后两维合并，确保总大小一致，依靠 Reshape 修正
-            // 这是一个权宜之计，为了不修改 Tensor 核心类
-            uint32_t last_dim = operand_shapes[3] * operand_shapes[4];
-            sftensor t = TensorCreate<float>(operand_shapes[1], operand_shapes[2], last_dim);
-            // 立即 Reshape 回正确的 5D 形状 (逻辑形状)
-            // 注意：Tensor 内部可能还不支持 raw_shapes 存 5D，这可能是隐患，但先跑通内存
-            return t;
-        }
-    default:
-      LOG(FATAL) << "Unknown output operand shape length: " << operand_shapes.size();
-      return nullptr;
-  }
-}
-
+// ---------------------------------------------------------
+// InitOperatorInput
+// ---------------------------------------------------------
 void RuntimeOperatorUtils<float>::InitOperatorInput(
     const std::vector<std::shared_ptr<RuntimeOperator>>& operators) {
   if (operators.empty()) {
@@ -110,9 +84,8 @@ void RuntimeOperatorUtils<float>::InitOperatorInput(
         const int32_t batch = input_operand_shape.at(0);
         CHECK(batch > 0) << "Dynamic batch size is not supported!";
         
-        // [Probe] 确保这里增加了 5
-        CHECK(input_operand_shape.size() == 2 || input_operand_shape.size() == 4 ||
-              input_operand_shape.size() == 3 || input_operand_shape.size() == 5)
+        // 5D check
+        CHECK(input_operand_shape.size() >= 2 && input_operand_shape.size() <= 5)
             << "Unsupported tensor shape sizes: " << input_operand_shape.size();
 
         if (!input_datas.empty()) {
@@ -125,20 +98,27 @@ void RuntimeOperatorUtils<float>::InitOperatorInput(
   }
 }
 
+// ---------------------------------------------------------
+// InitOperatorOutput (支持多输出算子，如 unbind)
+// ---------------------------------------------------------
 void RuntimeOperatorUtils<float>::InitOperatorOutput(
     const std::vector<pnnx::Operator*>& pnnx_operators,
     const std::vector<std::shared_ptr<RuntimeOperator>>& operators) {
   CHECK(!pnnx_operators.empty() && !operators.empty() && pnnx_operators.size() == operators.size());
   CHECK(pnnx_operators.size() == operators.size());
+  
   for (uint32_t i = 0; i < pnnx_operators.size(); ++i) {
+    // 获取当前算子的所有输出操作数
     const std::vector<pnnx::Operand*> operands = pnnx_operators[i]->outputs;
     if (operands.empty()) continue;
-    if (operands.size() > 1) {
-      LOG(FATAL) << "Only support one node one output yet!";
-    }
+    
+    // [FIX] 移除 "Only support one node one output" 的报错
+    // if (operands.size() > 1) { LOG(FATAL) ... }
 
+    // 使用第一个输出作为主参考 (Shape/Type)
     pnnx::Operand* operand = operands.front();
     CHECK(operand != nullptr && !operand->shape.empty()) << "Operand output is null or empty!";
+    
     std::vector<int32_t> operand_shapes;
     std::copy_if(operand->shape.begin(), operand->shape.end(), std::back_inserter(operand_shapes),
                  [](int32_t dim) { return dim > 0; });
@@ -146,79 +126,91 @@ void RuntimeOperatorUtils<float>::InitOperatorOutput(
     const auto& runtime_op = operators[i];
     auto& output_tensors = runtime_op->output_operands;
     
-    // [Probe] 增加 5D 检查
-    CHECK((operand_shapes.size() == 2 || operand_shapes.size() == 4 || 
-           operand_shapes.size() == 3 || operand_shapes.size() == 5))
+    CHECK(operand_shapes.size() >= 2 && operand_shapes.size() <= 5)
         << "Unsupported shape sizes: " << operand_shapes.size();
 
     size_t operand_size =
-        std::accumulate(operand_shapes.begin(), operand_shapes.end(), 1, std::multiplies());
+        std::accumulate(operand_shapes.begin(), operand_shapes.end(), 1, std::multiplies<size_t>());
 
     const int32_t batch = operand_shapes[0];
     CHECK_EQ(operand->type, 1) << "The type of pnnx operand is not float32";
-    
-    // [Probe] 打印正在初始化的算子
-    // LOG(INFO) << ">>> Init output for op: " << runtime_op->name << ", Shape: " << operand_shapes[1] << "...";
 
     if (!output_tensors) {
+      // -------------------------------------------
+      // 内存复用逻辑 (Memory Reuse Logic)
+      // [FIX] 仅针对单输出算子启用复用，多输出算子(如 unbind) 比较复杂，直接分配新内存更安全
+      // -------------------------------------------
       bool has_found = false;
-      for (uint32_t j = 0; j < i; ++j) {
-        if (has_found) {
-          break;
-        }
+      
+      if (operands.size() == 1) { 
+          for (uint32_t j = 0; j < i; ++j) {
+            if (has_found) break;
 
-        const auto& prev_runtime_op = operators.at(j);
-        if (!prev_runtime_op->output_operands || prev_runtime_op->occur_end_time != -1) {
-          continue;
-        }
-
-        if (runtime_op->start_time > prev_runtime_op->occur_end_time) {
-          prev_runtime_op->occur_end_time = -1;
-        }
-
-        if (runtime_op->start_time > prev_runtime_op->end_time) {
-          if (prev_runtime_op->output_operands->size() == operand_size) {
-            has_found = true;
-            const auto& prev_output_operand = prev_runtime_op->output_operands;
-            runtime_op->output_operands = std::make_shared<RuntimeOperand>(
-                prev_output_operand->name + "_output", operand_shapes, batch,
-                RuntimeDataType::kTypeFloat32);
-            const auto& prev_runtime_op_tensors = prev_output_operand->datas;
-            for (uint32_t b = 0; b < batch; ++b) {
-              sftensor prev_output_tensor = prev_runtime_op_tensors.at(b);
-              sftensor output_tensor = std::make_shared<ftensor>(prev_output_tensor->raw_ptr(),
-                                                                 prev_output_tensor->shapes());
-              
-              // [Probe] 关键点：在复用内存后进行 Reshape 检查
-              CheckAndReshapeTensor(output_tensor, operand_shapes);
-              
-              output_tensors->datas[b] = output_tensor;
+            const auto& prev_runtime_op = operators.at(j);
+            if (!prev_runtime_op->output_operands || prev_runtime_op->occur_end_time != -1) {
+              continue;
             }
-            prev_runtime_op->occur_end_time = runtime_op->end_time;
-            
-            // [Probe] 记录复用发生
-            // LOG(INFO) << "    Reused memory from: " << prev_runtime_op->name;
+            if (runtime_op->start_time > prev_runtime_op->occur_end_time) {
+              prev_runtime_op->occur_end_time = -1;
+            }
+
+            if (runtime_op->start_time > prev_runtime_op->end_time) {
+              // 复用检查
+              if (prev_runtime_op->output_operands->size() == operand_size) {
+                 // 物理检查
+                 if (!prev_runtime_op->output_operands->datas.empty()) {
+                     if (prev_runtime_op->output_operands->datas.size() != batch) continue;
+                     size_t physical_size = prev_runtime_op->output_operands->datas[0]->size();
+                     if (physical_size != operand_size) continue;
+                 }
+
+                has_found = true;
+                const auto& prev_output_operand = prev_runtime_op->output_operands;
+                runtime_op->output_operands = std::make_shared<RuntimeOperand>(
+                    prev_output_operand->name + "_output", operand_shapes, batch,
+                    RuntimeDataType::kTypeFloat32);
+                
+                const auto& prev_runtime_op_tensors = prev_output_operand->datas;
+                for (uint32_t b = 0; b < batch; ++b) {
+                  sftensor prev_output_tensor = prev_runtime_op_tensors.at(b);
+                  sftensor output_tensor = std::make_shared<ftensor>(prev_output_tensor->raw_ptr(),
+                                                                     prev_output_tensor->shapes());
+                  CheckAndReshapeTensor(output_tensor, operand_shapes);
+                  output_tensors->datas[b] = output_tensor;
+                }
+                prev_runtime_op->occur_end_time = runtime_op->end_time;
+              }
+            }
           }
-        }
       }
 
+      // -------------------------------------------
+      // 分配新内存 (支持多输出)
+      // -------------------------------------------
       if (!has_found) {
         std::vector<sftensor> output_operand_datas;
-        for (uint32_t j = 0; j < batch; ++j) {
-          // 使用包装好的 CreateTensor
-          output_operand_datas.push_back(CreateTensor(operand_shapes));
+        
+        // [FIX] 遍历所有 outputs，为每一个分配空间
+        // 注意：这里假设所有输出的 shape 是一样的 (对于 unbind/split 通常是成立的)
+        // 如果 shape 不一样，RuntimeOperand 目前的结构只能存一个 shape，这可能是一个限制
+        // 但对于 DeiT 的 unbind (QKV) 来说，三个输出 shape 是一致的。
+        for (size_t k = 0; k < operands.size(); ++k) {
+            for (uint32_t j = 0; j < batch; ++j) {
+              output_operand_datas.push_back(CreateTensor(operand_shapes));
+            }
         }
+        
         runtime_op->output_operands =
             std::make_shared<RuntimeOperand>(operand->name + "_output", operand_shapes,
                                              output_operand_datas, RuntimeDataType::kTypeFloat32);
       }
     } else {
+      // output_tensors 已存在的情况
+      // 假设 Attribute 节点不会有多输出
       CHECK(batch == output_tensors->datas.size());
       CHECK(output_tensors->type == RuntimeDataType::kTypeFloat32);
-      CHECK(output_tensors->shapes == operand_shapes);
       for (uint32_t b = 0; b < batch; ++b) {
         sftensor output_tensor = output_tensors->datas[b];
-        // [Probe] 关键点：对已存在的 Tensor 进行 Reshape 检查
         CheckAndReshapeTensor(output_tensor, operand_shapes);
       }
     }

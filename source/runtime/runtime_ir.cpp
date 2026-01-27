@@ -28,6 +28,7 @@
 #include "layer/abstract/layer_factory.hpp"
 #include "runtime/runtime_ir.hpp"
 #include "utils/time/time_logging.hpp"
+#include "data/tensor_util.hpp" // <--- 必须确认有这行
 
 namespace kuiper_infer {
 RuntimeGraph::RuntimeGraph(std::string param_path, std::string bin_path)
@@ -97,8 +98,8 @@ bool RuntimeGraph::Init() {
   return true;
 }
 
+// [FIXED] RuntimeGraph::Build with Auto-Reallocation for Attributes
 void RuntimeGraph::Build() {
-  LOG(INFO) << ">>> [BuildProbe] Starting Build...";
   if (graph_state_ == GraphState::Complete) {
     LOG(INFO) << "Model has been built already!";
     return;
@@ -112,77 +113,67 @@ void RuntimeGraph::Build() {
   CHECK(graph_state_ >= GraphState::NeedBuild);
   LOG_IF(FATAL, this->operators_.empty()) << "Graph operators is empty";
 
-  // 构建节点关系
-  LOG(INFO) << ">>> [BuildProbe] Creating Node Relations...";
+  // 1. 构建节点关系
   CreateNodeRelation();
 
-  // 节点拓扑排序
-  LOG(INFO) << ">>> [BuildProbe] Reverse Topo Sort...";
+  // 2. 拓扑排序
   ReverseTopoSort();
 
-  // 初始化输入输出空间
-  LOG(INFO) << ">>> [BuildProbe] Init Input/Output...";
+  // 3. 初始化输入输出
   RuntimeOperatorUtils<float>::InitOperatorInput(operators_);
   RuntimeOperatorUtils<float>::InitOperatorOutput(graph_->ops, operators_);
 
-  // [DEBUG] 初始化 Attribute 数据
-  LOG(INFO) << ">>> [BuildProbe] Filling Attribute Data...";
+  // 4. 填充 Attribute 数据 (关键修复)
   for (const auto& op : operators_) {
     if (op->type == "pnnx.Attribute") {
-      LOG(INFO) << ">>> [BuildProbe] Processing Attribute Op: " << op->name;
-      
       if (op->attribute.empty()) {
           LOG(ERROR) << "Attribute node " << op->name << " has no attributes!";
           continue;
       }
       
+      // 找到数据 payload
       std::shared_ptr<RuntimeAttribute> attr_data = nullptr;
       if (op->attribute.find("data") != op->attribute.end()) {
           attr_data = op->attribute.at("data");
       } else if (op->attribute.find("weight") != op->attribute.end()) {
           attr_data = op->attribute.at("weight");
       } else {
-           // 打印所有 attribute 名字以供调试
-           for(const auto& pair : op->attribute) {
-               LOG(INFO) << "  Has attr: " << pair.first;
-           }
-           attr_data = op->attribute.begin()->second;
+          attr_data = op->attribute.begin()->second;
       }
-
+      
       if (!attr_data) {
           LOG(ERROR) << "Failed to find data for attribute node " << op->name;
           continue;
       }
-      LOG(INFO) << ">>> [BuildProbe] Found attribute data.";
 
-      if (op->output_operands == nullptr) {
-          LOG(FATAL) << "Attribute node " << op->name << " output_operands is nullptr!";
+      // 计算属性的真实总大小
+      uint32_t total_size = 1;
+      std::vector<uint32_t> attr_shapes;
+      for(int i : attr_data->shape) {
+          attr_shapes.push_back(i);
+          total_size *= i;
       }
-      if (op->output_operands->datas.empty()) {
-          LOG(FATAL) << "Attribute node " << op->name << " output_operands->datas is empty!";
+      
+      // 遍历该算子的所有输出 Tensor (可能因为被误判为 Batch 而有多个)
+      if (op->output_operands == nullptr || op->output_operands->datas.empty()) {
+          continue;
       }
-      
-      std::shared_ptr<Tensor<float>> output_tensor = op->output_operands->datas.at(0);
-      if (output_tensor == nullptr) {
-          LOG(FATAL) << "Attribute node " << op->name << " output tensor[0] is nullptr!";
+
+      for (auto& output_tensor : op->output_operands->datas) {
+          // [FIX] 检查大小是否匹配，不匹配则重新分配！
+          // 这修正了 InitOperatorOutput 将属性误判为 Batch 导致的分配错误
+          if (output_tensor->size() != total_size) {
+              // 重新分配一个足够大的 Tensor (1, 1, total_size)
+              output_tensor = TensorCreate<float>(1, 1, total_size);
+          }
+          
+          // 现在大小一定匹配了，安全 Reshape
+          output_tensor->Reshape(attr_shapes);
+          
+          // 填充数据
+          const std::vector<float>& float_data = attr_data->get<float>(); 
+          output_tensor->Fill(float_data);
       }
-      LOG(INFO) << ">>> [BuildProbe] Got output tensor.";
-      
-      // 设置形状
-      std::vector<uint32_t> shapes;
-      for(int i : attr_data->shape) shapes.push_back(i);
-      LOG(INFO) << ">>> [BuildProbe] Reshaping to rank: " << shapes.size();
-      output_tensor->Reshape(shapes);
-      
-      // 填充数据
-      LOG(INFO) << ">>> [BuildProbe] Getting float data from attribute...";
-      // 这里是最可能崩的地方：数据转换
-      const std::vector<float>& float_data = attr_data->get<float>(); 
-      LOG(INFO) << ">>> [BuildProbe] Data size: " << float_data.size();
-      
-      LOG(INFO) << ">>> [BuildProbe] Filling tensor...";
-      output_tensor->Fill(float_data);
-      LOG(INFO) << ">>> [BuildProbe] Fill done.";
     }
   }
 
@@ -191,7 +182,6 @@ void RuntimeGraph::Build() {
     graph_.reset();
     graph_ = nullptr;
   }
-  LOG(INFO) << ">>> [BuildProbe] Build Finished.";
 }
 
 template <typename T>
