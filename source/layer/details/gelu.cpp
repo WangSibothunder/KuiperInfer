@@ -30,13 +30,12 @@ StatusCode GELULayer::Forward(const std::vector<std::shared_ptr<Tensor<float>>>&
 
   const uint32_t batch_size = inputs.size();
 
-#pragma omp parallel for num_threads(batch_size)
   for (uint32_t b = 0; b < batch_size; ++b) {
     const auto& input = inputs.at(b);
     CHECK(input != nullptr && !input->empty()) << "The input tensor at index " << b << " is empty";
 
     std::shared_ptr<Tensor<float>> output = outputs.at(b);
-    if (output == nullptr || output->empty()) {
+    if (output == nullptr || output->empty() || output->size() != input->size()) {
       output = std::make_shared<Tensor<float>>(input->shapes());
       outputs.at(b) = output;
     }

@@ -57,12 +57,38 @@ StatusCode Layer<float>::Forward() {
   LOG_IF(FATAL, this->runtime_operator_.expired()) << "Runtime operator is expired or nullptr";
   const auto& runtime_operator = this->runtime_operator_.lock();
   std::vector<std::shared_ptr<Tensor<float>>> layer_input_datas;
-  for (const auto& input_operand_data : runtime_operator->input_operands_seq) {
+  // 记录每个输入 tensor 对应的 operand 名称和 batch 索引，方便调试
+  std::vector<std::pair<std::string, size_t>> layer_input_meta;
+  const bool unbind_single_input_mode = (runtime_operator->type == "torch.unbind");
+  for (size_t idx = 0; idx < runtime_operator->input_operands_seq.size(); ++idx) {
+    const auto& input_operand_data = runtime_operator->input_operands_seq[idx];
     if (input_operand_data == nullptr) {
+      LOG(ERROR) << runtime_operator->name << " input_operand[" << idx << "] is nullptr";
       return StatusCode::kInferInputsEmpty;
     }
-    std::copy(input_operand_data->datas.begin(), input_operand_data->datas.end(),
-              std::back_inserter(layer_input_datas));
+    if (input_operand_data->datas.empty()) {
+      LOG(ERROR) << runtime_operator->name << " input_operand[" << idx
+                 << "] datas is empty, producer=" << input_operand_data->name;
+      return StatusCode::kInferInputsEmpty;
+    }
+    if (unbind_single_input_mode) {
+      // torch.unbind 在 DeiT 路径上是单输入多输出；当上游误把首维当成 batch 时，
+      // datas 可能被扩成多个槽位。这里仅取第一个非空输入，避免把它错误展平成多 batch。
+      size_t selected_index = 0;
+      for (size_t b = 0; b < input_operand_data->datas.size(); ++b) {
+        if (input_operand_data->datas[b] != nullptr && !input_operand_data->datas[b]->empty()) {
+          selected_index = b;
+          break;
+        }
+      }
+      layer_input_datas.push_back(input_operand_data->datas[selected_index]);
+      layer_input_meta.emplace_back(input_operand_data->name, selected_index);
+      continue;
+    }
+    for (size_t b = 0; b < input_operand_data->datas.size(); ++b) {
+      layer_input_datas.push_back(input_operand_data->datas[b]);
+      layer_input_meta.emplace_back(input_operand_data->name, b);
+    }
   }
 
   if (layer_input_datas.empty()) {
@@ -70,9 +96,14 @@ StatusCode Layer<float>::Forward() {
     return StatusCode::kInferInputsEmpty;
   }
 
-  for (sftensor layer_input_data : layer_input_datas) {
+  for (size_t i = 0; i < layer_input_datas.size(); ++i) {
+    const sftensor& layer_input_data = layer_input_datas[i];
     if (layer_input_data == nullptr || layer_input_data->empty()) {
-      LOG(ERROR) << "Layer input data is empty";
+      const auto& meta = (i < layer_input_meta.size()) ? layer_input_meta[i]
+                                                       : std::make_pair(std::string("unknown"), size_t(0));
+      LOG(ERROR) << runtime_operator->name << " layer input tensor[" << i
+                 << "] is empty, from operand=" << meta.first
+                 << ", batch=" << meta.second;
       return StatusCode::kInferInputsEmpty;
     }
   }

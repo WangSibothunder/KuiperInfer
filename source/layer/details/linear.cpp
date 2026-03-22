@@ -22,16 +22,18 @@
 // Created by fss on 22-11-13.
 
 #include "linear.hpp"
+#include <cblas.h>
 #include <glog/logging.h>
 #include "layer/abstract/layer_factory.hpp"
 
 namespace kuiper_infer {
 
-LinearLayer::LinearLayer(int32_t in_features, int32_t out_features, bool use_bias)
+LinearLayer::LinearLayer(int32_t in_features, int32_t out_features, bool use_bias, bool row_major_io)
     : ParamLayer("Linear"),
       use_bias_(use_bias),
       in_features_(in_features),
-      out_features_(out_features) {
+      out_features_(out_features),
+      row_major_io_(row_major_io) {
   CHECK_GT(in_features_, 0);
   CHECK_GT(out_features_, 0);
   this->InitWeightParam(1, 1, in_features_, out_features_);
@@ -69,43 +71,61 @@ StatusCode LinearLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>>
 
   uint32_t batch = inputs.size();
   const std::shared_ptr<Tensor<float>>& weight = weights_.front();
-  arma::fmat weight_data_t(weight->raw_ptr(), in_features_, out_features_, false, true);
+  CHECK(weight != nullptr && !weight->empty()) << "The weight tensor in linear layer is empty";
+  CHECK_EQ(weight->size(), static_cast<size_t>(in_features_) * out_features_)
+      << "The weight tensor size is not match to in/out features";
+  const float* weight_ptr = weight->raw_ptr();
 
-#pragma omp parallel for num_threads(batch)
   for (uint32_t i = 0; i < batch; ++i) {
     const std::shared_ptr<Tensor<float>>& input = inputs.at(i);
     CHECK(input != nullptr && !input->empty())
         << "The input tensor array in the linear layer has an empty tensor " << i << " th";
     const std::vector<uint32_t>& input_shapes = input->shapes();
 
-    const uint32_t feature_dims = input_shapes.at(1);
-    const uint32_t in_features = input_shapes.at(2);
-    CHECK(weight_data_t.n_cols == out_features_)
-        << "The row of weight tensor should be same to output features.";
-    CHECK(weight_data_t.n_rows == in_features && in_features == in_features_)
-        << "The col of weight tensor should be same to input features.";
+    uint32_t feature_dims = input_shapes.at(1);
+    uint32_t in_features = input_shapes.at(2);
+    CHECK_GT(out_features_, 0);
+    CHECK_GT(in_features_, 0);
 
-    arma::fmat input_vec(input->raw_ptr(), feature_dims, in_features_, false, true);
+    const uint32_t total_elements = input->size();
+    if (in_features != in_features_ || total_elements != feature_dims * in_features) {
+      CHECK_EQ(total_elements % in_features_, 0)
+          << "Input tensor size is not compatible with in_features";
+      in_features = in_features_;
+      feature_dims = total_elements / in_features_;
+    }
+    CHECK_GT(feature_dims, 0);
+
     std::shared_ptr<Tensor<float>> output = outputs.at(i);
-    if (output == nullptr || output->empty()) {
-      output = std::make_shared<Tensor<float>>(1, out_features_, feature_dims);
+    if (output == nullptr || output->empty() || output->rows() != feature_dims ||
+        output->cols() != out_features_ || output->channels() != 1) {
+      output = std::make_shared<Tensor<float>>(1, feature_dims, out_features_);
       outputs.at(i) = output;
     }
 
-    const auto& output_raw_shapes = output->raw_shapes();
-    if (output_raw_shapes.size() == 2) {
-      CHECK(output_raw_shapes.at(0) == feature_dims && output_raw_shapes.at(1) == out_features_)
-          << "The row of output tensor should be same to feature dims and the "
-             "col of output tensor should be same to output features.";
-    } else if (output_raw_shapes.size() == 1) {
-      CHECK(output_raw_shapes.at(0) == out_features_)
-          << "The row of output tensor should be same to feature dims.";
+    const float* input_ptr = input->raw_ptr();
+    float* output_ptr = output->raw_ptr();
+    if (row_major_io_) {
+      // A[M,K] * W^T[K,N] => C[M,N], where weight memory is [N,K] row-major.
+      cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                  static_cast<int>(feature_dims), out_features_, in_features_, 1.f,
+                  input_ptr, in_features_,
+                  weight_ptr, in_features_,
+                  0.f, output_ptr, out_features_);
     } else {
-      LOG(FATAL) << "The shape of output tensor need be equal to one or two";
+      for (uint32_t out_col = 0; out_col < static_cast<uint32_t>(out_features_); ++out_col) {
+        for (uint32_t row = 0; row < feature_dims; ++row) {
+          float sum = 0.f;
+          for (uint32_t in_col = 0; in_col < static_cast<uint32_t>(in_features_); ++in_col) {
+            const float in_val = input_ptr[row + in_col * feature_dims];
+            const float w_val = weight_ptr[in_col + out_col * static_cast<uint32_t>(in_features_)];
+            sum += in_val * w_val;
+          }
+          output_ptr[row + out_col * feature_dims] = sum;
+        }
+      }
     }
 
-    arma::fmat& result = output->slice(0);
-    result = input_vec * weight_data_t;
     if (use_bias_) {
       CHECK(!this->bias_.empty() && this->bias_.size() == 1)
           << "The bias tensor is empty, but \"use bias\" is true";
@@ -113,7 +133,22 @@ StatusCode LinearLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>>
       const auto& bias_data = bias_.front()->data();
       CHECK(!bias_data.empty() && bias_data.n_slices == 1 && bias_data.n_cols == out_features_)
           << "The col of bias tensor is not same to output features";
-      result.each_row() += bias_data.slice(0);
+      const float* bias_ptr = bias_.front()->raw_ptr();
+      if (row_major_io_) {
+        for (uint32_t row = 0; row < feature_dims; ++row) {
+          const uint32_t out_base = row * static_cast<uint32_t>(out_features_);
+          for (uint32_t out_col = 0; out_col < static_cast<uint32_t>(out_features_); ++out_col) {
+            output_ptr[out_base + out_col] += bias_ptr[out_col];
+          }
+        }
+      } else {
+        for (uint32_t out_col = 0; out_col < static_cast<uint32_t>(out_features_); ++out_col) {
+          const float b = bias_ptr[out_col];
+          for (uint32_t row = 0; row < feature_dims; ++row) {
+            output_ptr[row + out_col * feature_dims] += b;
+          }
+        }
+      }
     }
   }
   return StatusCode::kSuccess;
@@ -172,7 +207,9 @@ StatusCode LinearLayer::CreateInstance(const std::shared_ptr<RuntimeOperator>& o
   int32_t in_features = shapes.at(1);
   const bool use_bias = use_bias_param->value;
 
-  linear_layer = std::make_shared<LinearLayer>(in_features, out_features, use_bias);
+  const bool row_major_io =
+      (op->name.find("blocks.") == 0 || op->name == "head" || op->name == "blocks");
+  linear_layer = std::make_shared<LinearLayer>(in_features, out_features, use_bias, row_major_io);
   if (use_bias) {
     linear_layer->set_bias(bias->get<float>());
   }

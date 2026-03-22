@@ -5,7 +5,9 @@
 // Modified for DeiT support
 
 #include "reshape.hpp"
+#include <atomic>
 #include <numeric>
+#include <sstream>
 #include "layer/abstract/layer_factory.hpp"
 
 namespace kuiper_infer {
@@ -26,54 +28,99 @@ StatusCode ReshapeLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>
   }
 
   const uint32_t batch_size = inputs.size();
+  static std::atomic<uint32_t> reshape_call_count{0};
+  const bool debug_this = (reshape_call_count.fetch_add(1) == 0);
 
-#pragma omp parallel for num_threads(batch_size)
   for (uint32_t b = 0; b < batch_size; ++b) {
     const auto& input = inputs.at(b);
     CHECK(input != nullptr && !input->empty()) << "The input tensor at index " << b << " is empty";
 
     // 1. 计算总元素数量
-    const uint32_t total_elements = input->size();
+    const size_t total_elements = input->size();
+    const std::vector<uint32_t>& input_raw_shapes = input->raw_shapes();
+    const int input_rank = static_cast<int>(input_raw_shapes.size());
+    const int target_rank = static_cast<int>(target_shapes_.size());
     
     // 2. 解析目标形状 (处理 -1 和 0)
     std::vector<uint32_t> final_shapes;
     int32_t infer_idx = -1;
-    uint32_t current_size = 1;
+    size_t current_size = 1;
+
+    auto resolve_zero_dim = [&](int index) -> uint32_t {
+      if (input_raw_shapes.empty()) {
+        return 1;
+      }
+      if (input_rank == target_rank) {
+        return input_raw_shapes.at(index);
+      }
+      if (input_rank + 1 == target_rank) {
+        if (index == 0) {
+          return 1;
+        }
+        const int in_idx = index - 1;
+        if (in_idx >= 0 && in_idx < input_rank) {
+          return input_raw_shapes.at(in_idx);
+        }
+        return 1;
+      }
+      const int in_idx = index - target_rank + input_rank;
+      if (in_idx >= 0 && in_idx < input_rank) {
+        return input_raw_shapes.at(in_idx);
+      }
+      return 1;
+    };
 
     for (size_t i = 0; i < target_shapes_.size(); ++i) {
-        int32_t dim = target_shapes_[i];
-        if (dim == -1) {
-            CHECK_EQ(infer_idx, -1) << "Reshape can only have one -1 dimension";
-            infer_idx = i;
-            final_shapes.push_back(0); // 占位
+      int32_t dim = target_shapes_[i];
+      if (dim == -1) {
+        CHECK_EQ(infer_idx, -1) << "Reshape can only have one -1 dimension";
+        infer_idx = static_cast<int32_t>(i);
+        final_shapes.push_back(0);
+      } else {
+        uint32_t resolved_dim = 1;
+        if (dim == 0) {
+          resolved_dim = resolve_zero_dim(static_cast<int>(i));
         } else {
-            if (dim == 0) {
-                // PNNX 语义：0 意味着 copy input dim (通常用于 batch)，暂简化处理
-                // 如果遇到，通常意味着我们需要参考 input->shapes()[i]
-                // 这里假设 PNNX 导出的都是静态形状或非 0
-                dim = 1; 
-            }
-            final_shapes.push_back(dim);
-            current_size *= dim;
+          CHECK_GT(dim, 0) << "Invalid reshape dim: " << dim;
+          resolved_dim = static_cast<uint32_t>(dim);
         }
+        final_shapes.push_back(resolved_dim);
+        current_size *= resolved_dim;
+      }
     }
 
     // 3. 填充推断的维度 (-1)
     if (infer_idx != -1) {
-        CHECK_EQ(total_elements % current_size, 0) 
-            << "Total elements " << total_elements << " not divisible by known dimensions size " << current_size;
-        final_shapes[infer_idx] = total_elements / current_size;
+      CHECK_EQ(total_elements % current_size, 0)
+          << "Total elements " << total_elements
+          << " not divisible by known dimensions size " << current_size;
+      final_shapes[infer_idx] = static_cast<uint32_t>(total_elements / current_size);
     } else {
-        CHECK_EQ(total_elements, current_size)
-            << "Total elements " << total_elements << " does not match target shape size " << current_size;
+      CHECK_EQ(total_elements, current_size)
+          << "Total elements " << total_elements << " does not match target shape size " << current_size;
     }
 
     // 4. 准备输出 Tensor
     std::shared_ptr<Tensor<float>> output = outputs.at(b);
-    if (output == nullptr || output->empty()) {
+    if (output == nullptr || output->empty() || output->size() != total_elements) {
       // 先创建一个临时的 1D/2D Tensor 容纳数据
-      output = std::make_shared<Tensor<float>>(1, total_elements, 1);
+      output = std::make_shared<Tensor<float>>(1, static_cast<uint32_t>(total_elements), 1);
       outputs.at(b) = output;
+    }
+
+    if (debug_this) {
+      std::ostringstream target_ss;
+      target_ss << "(";
+      for (size_t si = 0; si < final_shapes.size(); ++si) {
+        if (si > 0) {
+          target_ss << ",";
+        }
+        target_ss << final_shapes[si];
+      }
+      target_ss << ")";
+      LOG(INFO) << ">>> [ReshapeDebugPre] input_size=" << total_elements
+                << " output_size=" << output->size()
+                << " target=" << target_ss.str();
     }
     
     // 5. 核心步骤：重设形状 (Reshape)
@@ -88,6 +135,20 @@ StatusCode ReshapeLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>
     
     // 执行拷贝
     memcpy(output->raw_ptr(), input->raw_ptr(), total_elements * sizeof(float));
+    if (debug_this) {
+      std::ostringstream shape_stream;
+      shape_stream << "(";
+      for (size_t si = 0; si < final_shapes.size(); ++si) {
+        if (si > 0) {
+          shape_stream << ",";
+        }
+        shape_stream << final_shapes[si];
+      }
+      shape_stream << ")";
+      LOG(INFO) << ">>> [ReshapeDebug] in_raw_rank=" << input_raw_shapes.size()
+                << " out_raw=" << shape_stream.str()
+                << " size=" << output->size();
+    }
   }
   return StatusCode::kSuccess;
 }

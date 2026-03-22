@@ -101,7 +101,6 @@ StatusCode ExpressionLayer::Forward(const std::vector<std::shared_ptr<Tensor<flo
         LOG(FATAL) << "Unsupported operator type in the expression layer: "
                    << int(current_token.token_type);
       }
-#pragma omp parallel for num_threads(batch_size)
       for (uint32_t i = 0; i < batch_size; ++i) {
         output_token_nodes.at(i) = function(input_node1.at(i), input_node2.at(i));
       }
@@ -112,7 +111,10 @@ StatusCode ExpressionLayer::Forward(const std::vector<std::shared_ptr<Tensor<flo
   std::vector<sftensor> output_node = op_stack.top();
   for (uint32_t i = 0; i < batch_size; ++i) {
     if (outputs.at(i) != nullptr && !outputs.at(i)->empty()) {
-      CHECK(outputs.at(i)->shapes() == output_node.at(i)->shapes());
+      if (outputs.at(i)->shapes() != output_node.at(i)->shapes()) {
+        outputs.at(i) = output_node.at(i);
+        continue;
+      }
     }
     outputs.at(i) = output_node.at(i);
   }

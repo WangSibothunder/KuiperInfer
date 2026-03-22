@@ -10,6 +10,7 @@ namespace kuiper_infer {
 class SelectLayer : public NonParamLayer {
  public:
   explicit SelectLayer(int32_t dim, int32_t index);
+  explicit SelectLayer(int32_t dim, int32_t index, uint32_t expected_out_size);
 
   StatusCode Forward(const std::vector<std::shared_ptr<Tensor<float>>>& inputs,
                      std::vector<std::shared_ptr<Tensor<float>>>& outputs) override;
@@ -20,6 +21,7 @@ class SelectLayer : public NonParamLayer {
  private:
   int32_t dim_ = 0;
   int32_t index_ = 0;
+  uint32_t expected_out_size_ = 0;
 };
 }  // namespace kuiper_infer
 

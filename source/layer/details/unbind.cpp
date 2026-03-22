@@ -94,10 +94,10 @@ StatusCode UnbindLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>>
   const float* in_ptr = input->raw_ptr();
   
   // 初始化所有输出 Tensor
+  const uint32_t out_size = input->size() / split_size;
   for (int i = 0; i < split_size; ++i) {
-      if (outputs[i] == nullptr || outputs[i]->empty()) {
-          // 计算单份的大小
-          outputs[i] = std::make_shared<Tensor<float>>(1, input->size() / split_size, 1);
+      if (outputs[i] == nullptr || outputs[i]->empty() || outputs[i]->size() != out_size) {
+          outputs[i] = std::make_shared<Tensor<float>>(1, out_size, 1);
       }
       outputs[i]->Reshape(out_shapes);
   }

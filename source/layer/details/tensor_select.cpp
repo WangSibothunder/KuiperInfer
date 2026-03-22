@@ -2,28 +2,77 @@
 // MIT License
 #include "tensor_select.hpp"
 #include "layer/abstract/layer_factory.hpp"
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <glog/logging.h>
+#include <numeric>
+#include <sstream>
 
 namespace kuiper_infer {
 
-SelectLayer::SelectLayer(int32_t dim, int32_t index)
-    : NonParamLayer("Tensor.select"), dim_(dim), index_(index) {}
+SelectLayer::SelectLayer(int32_t dim, int32_t index) : SelectLayer(dim, index, 0) {}
+
+SelectLayer::SelectLayer(int32_t dim, int32_t index, uint32_t expected_out_size)
+    : NonParamLayer("Tensor.select"),
+      dim_(dim),
+      index_(index),
+      expected_out_size_(expected_out_size) {}
 
 StatusCode SelectLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>>>& inputs,
                                 std::vector<std::shared_ptr<Tensor<float>>>& outputs) {
   if (inputs.empty()) return StatusCode::kInferInputsEmpty;
+  static const bool kDebugSelect = (std::getenv("KUIPER_DEBUG_SELECT") != nullptr);
 
   const uint32_t batch_size = inputs.size();
 
-#pragma omp parallel for num_threads(batch_size)
   for (uint32_t b = 0; b < batch_size; ++b) {
     const auto& input = inputs.at(b);
     const auto& in_shapes = input->raw_shapes();
-    
-    // 1. 处理维度索引 (支持负数索引)
+
+    // 先按 raw 维度解释 dim，再在必要时尝试 "去掉 batch 后" 的兼容映射。
     int32_t real_dim = dim_;
-    if (real_dim < 0) real_dim += in_shapes.size();
-    
-    CHECK(real_dim >= 0 && real_dim < in_shapes.size()) << "Select dim out of range";
+    const int32_t rank = static_cast<int32_t>(in_shapes.size());
+    if (real_dim < 0) real_dim += rank;
+    CHECK(real_dim >= 0 && real_dim < rank) << "Select dim out of range";
+
+    std::shared_ptr<Tensor<float>> output = outputs.at(b);
+    const uint32_t expected_out_size = expected_out_size_ > 0
+                                           ? expected_out_size_
+                                           : ((output != nullptr && !output->empty()) ? output->size() : 0);
+    if (expected_out_size > 0 && dim_ > 0) {
+      int32_t shifted_dim = dim_ - 1;
+      if (shifted_dim < 0) shifted_dim += rank;
+      if (shifted_dim >= 0 && shifted_dim < rank) {
+        const uint32_t out_size_direct = input->size() / in_shapes[real_dim];
+        const uint32_t out_size_shifted = input->size() / in_shapes[shifted_dim];
+        if (out_size_shifted == expected_out_size && out_size_direct != expected_out_size) {
+          real_dim = shifted_dim;
+        }
+      }
+    }
+    // 对 rank=2 的张量，很多 pnnx 图的 dim 来自 (B, N, C) 语义，此时 raw 已去掉 B。
+    // 在缺少预分配输出尺寸提示时，优先采用 dim-1 的兼容映射。
+    if (rank == 2 && dim_ == 1) {
+      real_dim = 0;
+    }
+
+    int32_t real_index = index_;
+    if (real_index < 0) real_index += static_cast<int32_t>(in_shapes[real_dim]);
+    CHECK(real_index >= 0 && real_index < static_cast<int32_t>(in_shapes[real_dim]))
+        << "Select index out of range";
+
+    if (kDebugSelect && dim_ == 1 && index_ == 0) {
+      std::stringstream in_ss;
+      in_ss << "(";
+      for (size_t k = 0; k < in_shapes.size(); ++k) {
+        in_ss << in_shapes[k] << (k + 1 == in_shapes.size() ? "" : ",");
+      }
+      in_ss << ")";
+      LOG(INFO) << ">>> [SelectDebug] dim=" << dim_ << " index=" << index_
+                << " mapped_dim=" << real_dim << " in_raw=" << in_ss.str()
+                << " input_size=" << input->size();
+    }
 
     // 2. 计算输出形状
     // Select 操作会移除被选中的那个维度
@@ -34,9 +83,9 @@ StatusCode SelectLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>>
     // 如果结果是标量或空，至少保留为 (1)
     if (out_shapes.empty()) out_shapes.push_back(1);
 
-    std::shared_ptr<Tensor<float>> output = outputs.at(b);
-    if (output == nullptr || output->empty()) {
-        output = std::make_shared<Tensor<float>>(1, input->size() / in_shapes[real_dim], 1);
+    const uint32_t out_size = input->size() / in_shapes[real_dim];
+    if (output == nullptr || output->empty() || output->size() != out_size) {
+        output = std::make_shared<Tensor<float>>(1, out_size, 1);
         outputs.at(b) = output;
     }
     output->Reshape(out_shapes);
@@ -58,8 +107,6 @@ StatusCode SelectLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>>
     
     // 计算选定维度的偏移基准
     uint32_t select_stride = in_strides[real_dim];
-    uint32_t select_offset_base = index_ * select_stride;
-    
     // 遍历输出并映射回输入
     const float* in_ptr = input->raw_ptr();
     float* out_ptr = output->raw_ptr();
@@ -82,9 +129,20 @@ StatusCode SelectLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>>
     for (uint32_t i = 0; i < total; ++i) {
         // 计算当前元素在 real_dim 上的坐标
         uint32_t current_dim_idx = (i / select_stride) % in_shapes[real_dim];
-        if (current_dim_idx == index_) {
+        if (static_cast<int32_t>(current_dim_idx) == real_index) {
             out_ptr[out_idx++] = in_ptr[i];
         }
+    }
+    CHECK(out_idx == out_size) << "Select output size mismatch";
+
+    if (kDebugSelect && dim_ == 1 && index_ == 0) {
+      std::stringstream out_ss;
+      out_ss << "(";
+      for (size_t k = 0; k < out_shapes.size(); ++k) {
+        out_ss << out_shapes[k] << (k + 1 == out_shapes.size() ? "" : ",");
+      }
+      out_ss << ")";
+      LOG(INFO) << ">>> [SelectDebug] out_raw=" << out_ss.str() << " out_size=" << out_size;
     }
   }
   return StatusCode::kSuccess;
@@ -102,7 +160,14 @@ StatusCode SelectLayer::CreateInstance(const std::shared_ptr<RuntimeOperator>& o
   if (op->params.find("index") != op->params.end()) 
      index = std::dynamic_pointer_cast<RuntimeParameterInt>(op->params.at("index"))->value;
 
-  layer = std::make_shared<SelectLayer>(dim, index);
+  uint32_t expected_out_size = 0;
+  if (op->output_operands != nullptr && !op->output_operands->shapes.empty()) {
+    expected_out_size = std::accumulate(op->output_operands->shapes.begin(),
+                                        op->output_operands->shapes.end(),
+                                        1u, std::multiplies<uint32_t>());
+  }
+
+  layer = std::make_shared<SelectLayer>(dim, index, expected_out_size);
   return StatusCode::kSuccess;
 }
 

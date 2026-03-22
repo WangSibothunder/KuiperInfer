@@ -20,11 +20,19 @@
 // SOFTWARE.
 
 #include "runtime/runtime_ir.hpp"
+#include <algorithm>
+#include <cstdlib>
 #include <deque>
 #include <iostream>
+#include <limits>
 #include <memory>
+#include <sstream>
+#include <unordered_set>
 #include <utility>
 #include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 #include "layer/abstract/layer_factory.hpp"
 #include "runtime/runtime_ir.hpp"
 #include "utils/time/time_logging.hpp"
@@ -154,15 +162,22 @@ void RuntimeGraph::Build() {
           total_size *= i;
       }
       
-      // 遍历该算子的所有输出 Tensor (可能因为被误判为 Batch 而有多个)
+      // 确保 Attribute 输出空间存在
       if (op->output_operands == nullptr || op->output_operands->datas.empty()) {
-          continue;
+          std::vector<int32_t> attr_shapes_i32;
+          attr_shapes_i32.reserve(attr_shapes.size());
+          for (auto s : attr_shapes) {
+            attr_shapes_i32.push_back(static_cast<int32_t>(s));
+          }
+          const uint32_t batch = attr_shapes.empty() ? 1 : attr_shapes.at(0);
+          op->output_operands = std::make_shared<RuntimeOperand>(
+              op->name + "_output", attr_shapes_i32, batch, RuntimeDataType::kTypeFloat32);
       }
 
       for (auto& output_tensor : op->output_operands->datas) {
-          // [FIX] 检查大小是否匹配，不匹配则重新分配！
+          // [FIX] 检查大小是否匹配，不匹配或为空则重新分配！
           // 这修正了 InitOperatorOutput 将属性误判为 Batch 导致的分配错误
-          if (output_tensor->size() != total_size) {
+          if (!output_tensor || output_tensor->size() != total_size) {
               // 重新分配一个足够大的 Tensor (1, 1, total_size)
               output_tensor = TensorCreate<float>(1, 1, total_size);
           }
@@ -172,8 +187,12 @@ void RuntimeGraph::Build() {
           
           // 填充数据
           const std::vector<float>& float_data = attr_data->get<float>(); 
-          output_tensor->Fill(float_data);
+          // Keep raw payload order from pnnx attribute blob.
+          output_tensor->Fill(float_data, false);
       }
+      LOG(INFO) << "Attribute node " << op->name << " filled, shape=("
+                << attr_shapes[0] << "," << (attr_shapes.size() > 1 ? attr_shapes[1] : 1)
+                << "," << (attr_shapes.size() > 2 ? attr_shapes[2] : 1) << ")";
     }
   }
 
@@ -209,6 +228,23 @@ void RuntimeGraph::Forward(bool debug) {
     utils::LayerTimeStatesSingleton::LayerTimeStatesCollectorInit();
   }
 
+  auto propagate_attribute = [&](const std::shared_ptr<RuntimeOperator>& current_op) {
+    if (!current_op || current_op->type != "pnnx.Attribute") {
+      return;
+    }
+    if (current_op->output_operands == nullptr || current_op->output_operands->datas.empty()) {
+      LOG(ERROR) << "Attribute node " << current_op->name << " has no output datas to propagate!";
+      return;
+    }
+
+    PropagateLayerOutputs(current_op, current_op->output_operands->datas, debug);
+  };
+
+  // Pre-propagate all attribute constants before executing other ops
+  for (const auto& current_op : operators_) {
+    propagate_attribute(current_op);
+  }
+
   for (const auto& current_op : operators_) {
     current_op->has_forward = false;
     CHECK_GT(current_op->start_time, 0);
@@ -223,11 +259,6 @@ void RuntimeGraph::Forward(bool debug) {
     // 虽然不执行 Layer 计算，但必须向下游传播数据！
     if (current_op->type == "pnnx.Attribute") {
       current_op->has_forward = true;
-      if (current_op->output_operands != nullptr && !current_op->output_operands->datas.empty()) {
-          PropagateLayerOutputs(current_op, current_op->output_operands->datas);
-      } else {
-          LOG(ERROR) << "Attribute node " << current_op->name << " has no output datas to propagate!";
-      }
       continue;
     }
 
@@ -236,13 +267,106 @@ void RuntimeGraph::Forward(bool debug) {
         << "The layer corresponding to the op " << current_op->name
         << " is empty, indicating that it may not have been created.";
 
+    if (debug) {
+      LOG(INFO) << ">>> [ForwardOp] " << current_op->name << " (Type: " << current_op->type
+                << ")";
+      if (current_op->name == "Tensor.select_89" || current_op->name == "head") {
+        for (size_t in_idx = 0; in_idx < current_op->input_operands_seq.size(); ++in_idx) {
+          const auto& in_operand = current_op->input_operands_seq[in_idx];
+          if (in_operand == nullptr) {
+            LOG(INFO) << ">>> [ForwardShapeProbe] op=" << current_op->name << " input[" << in_idx
+                      << "] <null operand>";
+            continue;
+          }
+          std::stringstream in_shape_ss;
+          in_shape_ss << "(";
+          for (size_t k = 0; k < in_operand->shapes.size(); ++k) {
+            in_shape_ss << in_operand->shapes[k]
+                        << (k + 1 == in_operand->shapes.size() ? "" : ",");
+          }
+          in_shape_ss << ")";
+          LOG(INFO) << ">>> [ForwardShapeProbe] op=" << current_op->name << " input[" << in_idx
+                    << "] name=" << in_operand->name << " operand_shape=" << in_shape_ss.str()
+                    << " datas=" << in_operand->datas.size();
+          for (size_t b = 0; b < in_operand->datas.size(); ++b) {
+            const auto& t = in_operand->datas[b];
+            if (t == nullptr || t->empty()) {
+              LOG(INFO) << ">>> [ForwardShapeProbe] op=" << current_op->name << " input[" << in_idx
+                        << "] batch=" << b << " tensor=<empty>";
+              continue;
+            }
+            std::stringstream raw_ss;
+            raw_ss << "(";
+            const auto& raw = t->raw_shapes();
+            for (size_t kk = 0; kk < raw.size(); ++kk) {
+              raw_ss << raw[kk] << (kk + 1 == raw.size() ? "" : ",");
+            }
+            raw_ss << ")";
+            LOG(INFO) << ">>> [ForwardShapeProbe] op=" << current_op->name << " input[" << in_idx
+                      << "] batch=" << b << " raw_shape=" << raw_ss.str()
+                      << " size=" << t->size();
+          }
+        }
+      }
+    }
+
     StatusCode status = ExecuteLayer(current_op->layer, current_op->name, current_op->type, debug);
     CHECK(status == StatusCode::kSuccess)
         << current_op->layer->layer_name()
         << " layer forward failed, error code: " << int32_t(status);
 
+    if (debug) {
+      LOG(INFO) << ">>> [ForwardOpExecDone] " << current_op->name;
+      static const std::unordered_set<std::string> kStatProbeOps = {
+          "patch_embed.proj",   "torch.flatten_63",   "torch.transpose_64",
+          "torch.cat_62",       "pnnx_expr_234",      "ln_0",
+          "blocks.0.attn.qkv",  "Tensor.reshape_38",  "Tensor.permute_26",
+          "torch.unbind_77",    "F.scaled_dot_product_attention_116",
+          "torch.transpose_65", "Tensor.reshape_39",  "blocks.0.attn.proj",
+          "pnnx_expr_218",      "ln_1",               "blocks.0.mlp.fc1",
+          "blocks.0.mlp.act",   "blocks.0.mlp.fc2",   "pnnx_expr_215"};
+      if (kStatProbeOps.find(current_op->name) != kStatProbeOps.end()) {
+        const auto& outs = current_op->output_operands->datas;
+        if (!outs.empty() && outs[0] != nullptr && !outs[0]->empty()) {
+          const auto& t = outs[0];
+          const float* ptr = t->raw_ptr();
+          const uint32_t n = t->size();
+          double sum = 0.0;
+          double sq = 0.0;
+          float mn = std::numeric_limits<float>::infinity();
+          float mx = -std::numeric_limits<float>::infinity();
+          for (uint32_t i = 0; i < n; ++i) {
+            const float v = ptr[i];
+            sum += v;
+            sq += static_cast<double>(v) * static_cast<double>(v);
+            mn = std::min(mn, v);
+            mx = std::max(mx, v);
+          }
+          const double mean = sum / std::max<uint32_t>(1, n);
+          const double var = std::max(0.0, sq / std::max<uint32_t>(1, n) - mean * mean);
+          std::ostringstream first_ss;
+          first_ss << "[";
+          for (uint32_t i = 0; i < std::min<uint32_t>(5, n); ++i) {
+            if (i > 0) first_ss << ",";
+            first_ss << ptr[i];
+          }
+          first_ss << "]";
+          LOG(INFO) << ">>> [TensorStat] op=" << current_op->name
+                    << " n=" << n
+                    << " mean=" << mean
+                    << " std=" << std::sqrt(var)
+                    << " min=" << mn
+                    << " max=" << mx
+                    << " first=" << first_ss.str();
+        }
+      }
+    }
+
     current_op->has_forward = true;
-    PropagateLayerOutputs(current_op, current_op->output_operands->datas);
+    PropagateLayerOutputs(current_op, current_op->output_operands->datas, debug);
+    if (debug) {
+      LOG(INFO) << ">>> [ForwardOpDone] " << current_op->name;
+    }
   }
 
   if (debug) {
@@ -421,9 +545,73 @@ void RuntimeGraph::InitGraphAttrs(const std::map<std::string, pnnx::Attribute>& 
 template <typename T>
 void RuntimeGraph::PropagateLayerOutputs(
     const std::shared_ptr<RuntimeOperatorBase<T>>& current_op,
-    const std::vector<std::shared_ptr<Tensor<T>>>& layer_output_datas) {
+    const std::vector<std::shared_ptr<Tensor<T>>>& layer_output_datas,
+    bool debug) {
+  auto shapes_to_string = [](const std::vector<int32_t>& shapes) {
+    std::ostringstream ss;
+    ss << "(";
+    for (size_t i = 0; i < shapes.size(); ++i) {
+      if (i > 0) ss << ",";
+      ss << shapes[i];
+    }
+    ss << ")";
+    return ss.str();
+  };
+
+  auto raw_shapes_to_string = [](const std::vector<uint32_t>& shapes) {
+    std::ostringstream ss;
+    ss << "(";
+    for (size_t i = 0; i < shapes.size(); ++i) {
+      if (i > 0) ss << ",";
+      ss << shapes[i];
+    }
+    ss << ")";
+    return ss.str();
+  };
+
+  static std::unordered_set<std::string> warned_edges;
+
   // For each next operator of current operator
   for (const auto& [_, output_op] : current_op->output_operators) {
+    if (debug && current_op->name == "pnnx_fold_38" && output_op->name == "torch.cat_62") {
+      std::ostringstream out_names;
+      bool first = true;
+      for (const auto& [name, __] : current_op->output_operators) {
+        if (!first) out_names << ",";
+        out_names << name;
+        first = false;
+      }
+
+      std::ostringstream in_keys;
+      first = true;
+      for (const auto& [name, __] : output_op->input_operands) {
+        if (!first) in_keys << ",";
+        in_keys << name;
+        first = false;
+      }
+
+      LOG(INFO) << "[PropagateProbe] " << current_op->name << " -> " << output_op->name
+                << " output_operators={" << out_names.str() << "} input_keys={"
+                << in_keys.str() << "}";
+
+      for (const auto& operand : output_op->input_operands_seq) {
+        if (!operand) {
+          LOG(INFO) << "[PropagateProbe] input_operand <null>";
+          continue;
+        }
+        uint32_t empty_cnt = 0;
+        for (const auto& t : operand->datas) {
+          if (!t || t->empty()) {
+            empty_cnt += 1;
+          }
+        }
+        LOG(INFO) << "[PropagateProbe] input_operand name=" << operand->name
+                  << " shapes=" << shapes_to_string(operand->shapes)
+                  << " datas=" << operand->datas.size()
+                  << " empty=" << empty_cnt;
+      }
+    }
+
     // Get next op's input operands corresponding to current op's output
     const auto& next_input_operands = output_op->input_operands;
     const auto& next_input_op_iter = next_input_operands.find(current_op->name);
@@ -431,12 +619,165 @@ void RuntimeGraph::PropagateLayerOutputs(
       // Get input data spaces for those operands
       std::vector<stensor<T>>& next_input_datas = next_input_op_iter->second->datas;
       // Copy current op output data to next op input data
-      for (uint32_t i = 0; i < next_input_datas.size(); ++i) {
-        const stensor<T>& layer_output_data = layer_output_datas.at(i);
+      const size_t copy_count = std::min(next_input_datas.size(), layer_output_datas.size());
+      for (size_t i = 0; i < copy_count; ++i) {
+        const stensor<T>& layer_output_data = layer_output_datas[i];
         if (next_input_datas.at(i) != nullptr) {
           CHECK(next_input_datas.at(i)->shapes() == layer_output_data->shapes());
         }
         next_input_datas.at(i) = layer_output_data;
+      }
+
+      // Handle one-producer multi-output case (e.g. torch.unbind -> attention q/k/v):
+      // input_operands map can only keep one entry per producer name, so distribute
+      // remaining outputs to other input_operands_seq entries with the same producer name.
+      if (layer_output_datas.size() > copy_count) {
+        size_t cursor = copy_count;
+        for (auto& input_operand : output_op->input_operands_seq) {
+          if (!input_operand || input_operand->name != current_op->name ||
+              input_operand.get() == next_input_op_iter->second.get()) {
+            continue;
+          }
+          if (input_operand->datas.empty()) {
+            input_operand->datas.resize(1);
+          }
+          const size_t assign_count =
+              std::min(input_operand->datas.size(), layer_output_datas.size() - cursor);
+          for (size_t i = 0; i < assign_count; ++i) {
+            const auto& src = layer_output_datas[cursor + i];
+            if (!src || src->empty()) {
+              continue;
+            }
+            input_operand->datas[i] = src;
+          }
+          cursor += assign_count;
+          if (cursor >= layer_output_datas.size()) {
+            break;
+          }
+        }
+      }
+
+      if (debug && next_input_datas.size() != layer_output_datas.size()) {
+        LOG(WARNING) << "[PropagateMismatch] edge " << current_op->name << " -> "
+                     << output_op->name << " next_input_datas=" << next_input_datas.size()
+                     << " layer_output_datas=" << layer_output_datas.size();
+        if (current_op->name == "torch.unbind_77" &&
+            output_op->name == "F.scaled_dot_product_attention_116") {
+          size_t same_name_idx = 0;
+          for (const auto& input_operand : output_op->input_operands_seq) {
+            if (!input_operand || input_operand->name != current_op->name) {
+              continue;
+            }
+            const auto& tensor = input_operand->datas.empty() ? nullptr : input_operand->datas[0];
+            const void* ptr = tensor ? static_cast<const void*>(tensor->raw_ptr()) : nullptr;
+            std::string shape_str = "null";
+            if (tensor && !tensor->empty()) {
+              std::ostringstream ss;
+              ss << raw_shapes_to_string(tensor->raw_shapes());
+              shape_str = ss.str();
+            }
+            LOG(INFO) << "[UnbindPropagateProbe] slot=" << same_name_idx
+                      << " ptr=" << ptr << " shape=" << shape_str;
+            same_name_idx += 1;
+          }
+        }
+      }
+      continue;
+    }
+
+    // Fallback path: key mismatch or missing edge in input map
+    bool assigned = false;
+    for (auto& input_operand : output_op->input_operands_seq) {
+      if (!input_operand) {
+        continue;
+      }
+      if (input_operand->name != current_op->name) {
+        continue;
+      }
+      if (input_operand->datas.empty()) {
+        input_operand->datas.resize(layer_output_datas.size());
+      }
+
+      const size_t count = std::min(input_operand->datas.size(), layer_output_datas.size());
+      for (size_t i = 0; i < count; ++i) {
+        const auto& src = layer_output_datas[i];
+        if (!src || src->empty()) {
+          continue;
+        }
+        if (input_operand->datas[i] == nullptr || input_operand->datas[i]->empty()) {
+          input_operand->datas[i] = src;
+          assigned = true;
+        }
+      }
+      if (assigned) {
+        break;
+      }
+    }
+
+    if (assigned) {
+      continue;
+    }
+
+    // Shape-based fallback: compare tensor raw shapes to operand shapes (with and without batch)
+    for (auto& input_operand : output_op->input_operands_seq) {
+      if (!input_operand) {
+        continue;
+      }
+      if (input_operand->datas.empty()) {
+        input_operand->datas.resize(layer_output_datas.size());
+      }
+
+      std::vector<uint32_t> operand_shapes_full;
+      operand_shapes_full.reserve(input_operand->shapes.size());
+      for (int32_t dim : input_operand->shapes) {
+        if (dim <= 0) {
+          operand_shapes_full.clear();
+          break;
+        }
+        operand_shapes_full.push_back(static_cast<uint32_t>(dim));
+      }
+
+      std::vector<uint32_t> operand_shapes_no_batch;
+      if (operand_shapes_full.size() >= 2) {
+        operand_shapes_no_batch.assign(operand_shapes_full.begin() + 1, operand_shapes_full.end());
+      }
+
+      const size_t count = std::min(input_operand->datas.size(), layer_output_datas.size());
+      for (size_t i = 0; i < count; ++i) {
+        const auto& src = layer_output_datas[i];
+        if (!src || src->empty()) {
+          continue;
+        }
+        if (input_operand->datas[i] != nullptr && !input_operand->datas[i]->empty()) {
+          continue;
+        }
+
+        const auto& raw_shapes = src->raw_shapes();
+        const bool match_full =
+            !operand_shapes_full.empty() && raw_shapes == operand_shapes_full;
+        const bool match_no_batch =
+            !operand_shapes_no_batch.empty() && raw_shapes == operand_shapes_no_batch;
+
+        if (match_full || match_no_batch) {
+          if (debug) {
+            LOG(INFO) << "[PropagateFallback] " << current_op->name << " -> " << output_op->name
+                      << " matched shapes raw=" << raw_shapes_to_string(raw_shapes)
+                      << " operand=" << shapes_to_string(input_operand->shapes);
+          }
+          input_operand->datas[i] = src;
+          assigned = true;
+        }
+      }
+      if (assigned) {
+        break;
+      }
+    }
+
+    if (!assigned) {
+      const std::string edge_key = current_op->name + "->" + output_op->name;
+      if (warned_edges.insert(edge_key).second) {
+        LOG(WARNING) << "Propagate fallback failed for edge " << edge_key
+                     << " (missing input map key and no shape match)";
       }
     }
   }
@@ -533,6 +874,33 @@ void RuntimeGraph::CreateNodeRelation() {
       for (const auto& output_op : this->operators_) {
         if (output_op != current_op && output_op->name == kOutputName) {
           current_op->output_operators.insert({kOutputName, output_op});
+        }
+      }
+    }
+
+    // 2.1 Fallback: 如果 output_names 为空或未建立关系，则从输入依赖反推连接
+    if (current_op->output_operators.empty()) {
+      for (const auto& output_op : this->operators_) {
+        if (output_op == current_op) {
+          continue;
+        }
+
+        bool matched = false;
+        for (const auto& [__, input_operand] : output_op->input_operands) {
+          if (input_operand && input_operand->name == current_op->name) {
+            current_op->output_operators.insert({output_op->name, output_op});
+            matched = true;
+            break;
+          }
+        }
+
+        if (!matched) {
+          for (const auto& input_operand : output_op->input_operands_seq) {
+            if (input_operand && input_operand->name == current_op->name) {
+              current_op->output_operators.insert({output_op->name, output_op});
+              break;
+            }
+          }
         }
       }
     }

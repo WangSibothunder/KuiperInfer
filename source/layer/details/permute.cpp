@@ -6,7 +6,9 @@
 
 #include "permute.hpp"
 #include "layer/abstract/layer_factory.hpp"
+#include <atomic>
 #include <numeric>
+#include <sstream>
 
 namespace kuiper_infer {
 
@@ -26,8 +28,9 @@ StatusCode PermuteLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>
   }
 
   const uint32_t batch_size = inputs.size();
+  static std::atomic<uint32_t> permute_call_count{0};
+  const bool debug_this = (permute_call_count.fetch_add(1) == 0);
 
-#pragma omp parallel for num_threads(batch_size)
   for (uint32_t b = 0; b < batch_size; ++b) {
     const auto& input = inputs.at(b);
     CHECK(input != nullptr && !input->empty()) << "The input tensor at index " << b << " is empty";
@@ -80,7 +83,6 @@ StatusCode PermuteLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>
     float* out_ptr = output->raw_ptr();
     const uint32_t total_elements = input->size();
 
-    // 这里的循环可以进一步并行化，但最外层已有 batch 并行
     for (uint32_t i = 0; i < total_elements; ++i) {
         // A. 将线性索引 i 转换为 输出坐标 (out_coords)
         // 例如 5D: [d0, d1, d2, d3, d4]
@@ -99,7 +101,22 @@ StatusCode PermuteLayer::Forward(const std::vector<std::shared_ptr<Tensor<float>
         }
         
         // B. 拷贝数据
+        CHECK_LT(in_offset, total_elements);
         out_ptr[i] = in_ptr[in_offset];
+    }
+
+    if (debug_this) {
+      std::ostringstream out_shape_ss;
+      out_shape_ss << "(";
+      for (size_t si = 0; si < out_shapes.size(); ++si) {
+        if (si > 0) {
+          out_shape_ss << ",";
+        }
+        out_shape_ss << out_shapes[si];
+      }
+      out_shape_ss << ")";
+      LOG(INFO) << ">>> [PermuteDebug] in_rank=" << rank << " out_raw=" << out_shape_ss.str()
+                << " size=" << output->size();
     }
   }
   return StatusCode::kSuccess;
@@ -161,4 +178,3 @@ StatusCode TransposeCreateInstance(const std::shared_ptr<RuntimeOperator>& op,
 LayerRegistererWrapper kPermuteCreateInstance(PermuteLayer::CreateInstance, "Tensor.permute");
 
 }  // namespace kuiper_infer
-

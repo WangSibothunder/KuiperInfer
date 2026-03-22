@@ -17,8 +17,7 @@ static sftensor CreateTensor(const std::vector<int32_t>& operand_shapes) {
   }
   
   uint32_t total_size = 1;
-  // 跳过 Batch 维度 (index 0)
-  for (size_t i = 1; i < operand_shapes.size(); ++i) {
+  for (size_t i = 0; i < operand_shapes.size(); ++i) {
       if (operand_shapes[i] <= 0) {
           continue; // 忽略动态维度
       }
@@ -40,9 +39,9 @@ static void CheckAndReshapeTensor(sftensor& output_tensor,
       if (dim < 0) return; // 跳过 Reshape
   }
   
-  // 2. 构造目标形状 (剔除 Batch)
+  // 2. 构造目标形状
   std::vector<uint32_t> target_shapes;
-  for (size_t i = 1; i < operand_shapes.size(); ++i) {
+  for (size_t i = 0; i < operand_shapes.size(); ++i) {
       target_shapes.push_back(static_cast<uint32_t>(operand_shapes[i]));
   }
   
@@ -81,8 +80,7 @@ void RuntimeOperatorUtils<float>::InitOperatorInput(
         const auto& input_operand_shape = input_operand->shapes;
 
         CHECK(!input_operand_shape.empty());
-        const int32_t batch = input_operand_shape.at(0);
-        CHECK(batch > 0) << "Dynamic batch size is not supported!";
+        const int32_t batch = 1;
         
         // 5D check
         CHECK(input_operand_shape.size() >= 2 && input_operand_shape.size() <= 5)
@@ -132,7 +130,7 @@ void RuntimeOperatorUtils<float>::InitOperatorOutput(
     size_t operand_size =
         std::accumulate(operand_shapes.begin(), operand_shapes.end(), 1, std::multiplies<size_t>());
 
-    const int32_t batch = operand_shapes[0];
+    const int32_t batch = 1;
     CHECK_EQ(operand->type, 1) << "The type of pnnx operand is not float32";
 
     if (!output_tensors) {
@@ -141,8 +139,11 @@ void RuntimeOperatorUtils<float>::InitOperatorOutput(
       // [FIX] 仅针对单输出算子启用复用，多输出算子(如 unbind) 比较复杂，直接分配新内存更安全
       // -------------------------------------------
       bool has_found = false;
-      
-      if (operands.size() == 1) { 
+
+      // Disable output-memory alias reuse for stability in complex graphs (e.g. DeiT).
+      // Some layers may replace output tensor shared_ptr when shape/size changes, which can
+      // invalidate aliased tensors captured by downstream operators.
+      if (false && operands.size() == 1) {
           for (uint32_t j = 0; j < i; ++j) {
             if (has_found) break;
 

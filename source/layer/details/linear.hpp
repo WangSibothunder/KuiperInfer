@@ -31,7 +31,8 @@ class LinearLayer : public ParamLayer {
  public:
   //  explicit LinearLayer(uint32_t batch, uint32_t in_channel, uint32_t in_dim, uint32_t out_dim,
   //  bool use_bias = true);
-  explicit LinearLayer(int32_t in_features, int32_t out_features, bool use_bias);
+  explicit LinearLayer(int32_t in_features, int32_t out_features, bool use_bias,
+                       bool row_major_io = false);
 
   StatusCode Check(const std::vector<sftensor>& inputs,
                    const std::vector<sftensor>& outputs) override;
@@ -50,6 +51,7 @@ class LinearLayer : public ParamLayer {
   int32_t in_features_ = 0;
   int32_t out_features_ = 0;
   bool use_bias_ = false;
+  bool row_major_io_ = false;
 };
 }  // namespace kuiper_infer
 

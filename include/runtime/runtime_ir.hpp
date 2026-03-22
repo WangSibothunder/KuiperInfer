@@ -246,7 +246,8 @@ class RuntimeGraph {
   template <typename T>
   static void PropagateLayerOutputs(
       const std::shared_ptr<RuntimeOperatorBase<T>>& current_op,
-      const std::vector<std::shared_ptr<Tensor<T>>>& layer_output_data);
+      const std::vector<std::shared_ptr<Tensor<T>>>& layer_output_data,
+      bool debug = false);
 
  private:
   /**
